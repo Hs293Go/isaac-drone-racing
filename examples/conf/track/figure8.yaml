@@ -1,0 +1,18 @@
+# Figure-8 racecourse (r = 1.5), in the OQCRL NED frame: z down, gates at z=-1.5 (1.5 m up).
+# Gates 1 and 5 share the centre (0,0) crossing of the 8. Swap this file to race a different course.
+gate_pos:
+  - [1.5, -1.5, -1.5]
+  - [0.0, 0.0, -1.5]
+  - [-1.5, 1.5, -1.5]
+  - [0.0, 3.0, -1.5]
+  - [1.5, 1.5, -1.5]
+  - [0.0, 0.0, -1.5]
+  - [-1.5, -1.5, -1.5]
+  - [0.0, -3.0, -1.5]
+
+# Gate headings as multiples of pi/2 (see gate_yaw_unit).
+gate_yaw: [1, 2, 1, 0, -1, -2, -1, 0]
+gate_yaw_unit: multiples_pi_2
+
+start_pos: [1.5, -2.5, -1.5]   # 1 m behind gate 0
+gate_size: 1.5                  # gate window side length (m)

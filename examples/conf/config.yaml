@@ -1,0 +1,15 @@
+# Top-level hydra config: compose a racecourse (track group) and a run session (session group).
+# Override on the CLI, e.g.:  python -m isaacrace.demo track=figure8 session.headless=false
+defaults:
+  - track: figure8
+  - session: default
+  - _self_
+
+# Keep the working directory stable (Isaac writes caches/logs relative to it) and don't scatter
+# dated outputs/ dirs — this is a demo, not a hyperparameter sweep.
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null

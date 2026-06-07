@@ -1,0 +1,145 @@
+# isaacrace — minimal Isaac Sim drone RL: race a quadrotor through a figure-8 gate course.
+#
+# Isaac Sim is consumed as the pip-installed `isaacsim` package from NVIDIA's index (cp311) — no
+# standalone zip, no ISAACSIM_PATH, no PYTHONPATH patching. Run with `env -u PYTHONPATH` so a sourced
+# ROS distro can't leak into the 3.11 venv; `OMNI_KIT_ACCEPT_EULA=YES` accepts the EULA non-interactively.
+#
+# Setup:  uv sync
+# Demo:   env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES uv run python examples/demo.py session.headless=false
+# Train:  env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES uv run python examples/train.py
+
+[project]
+name = "isaacrace"
+version = "0.1.0"
+description = "Minimal Isaac Sim (PhysX) drone RL: race a quadrotor through a figure-8 gate course."
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "isaacsim[all,extscache]==5.1.0.0",
+  "stable-baselines3>=2.8,<2.9",
+  "gymnasium>=1.0",
+  "torch",
+  "numpy",
+  "scipy",
+  "tensorboard>=2.20",
+  "setuptools<82",                    # Tensorboard imports pkg_resources, which is removed in setuptools 82.
+  "shapely",                          # Isaac Sim's replicator extensions import shapely at boot; declare it so kit never shells out.
+  "hydra-core>=1.3",
+  "tqdm",                             # PPO training progress bar (sb3 progress_bar=True)
+  "rich",                             # tqdm.rich backend used by sb3's progress bar
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/isaacrace"]
+
+[tool.uv]
+index-strategy = "unsafe-best-match"
+constraint-dependencies = ["lxml<7", "stable-baselines3<2.9"]
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+
+[dependency-groups]
+# Test-only deps; dynamics.py is pure NumPy, so the dynamics tests run under plain
+# pytest (no Isaac Sim boot). sympy is the symbolic ground truth ported from OQCRL.
+dev = ["pytest>=8", "sympy>=1.13"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+preview = true
+fix = true
+unsafe-fixes = true
+extend-exclude = [".venv", "venv", "build", "dist"]
+
+[tool.ruff.format]
+docstring-code-format = true
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "W",
+  "B",
+  "I",
+  "N",
+  "D",
+  "UP",
+  "S",
+  "SIM",
+  "C4",
+  "PTH",
+  "PIE",
+  "PERF",
+  "ISC",
+  "ICN",
+  "ARG",
+  "YTT",
+  "SLF",
+  "TRY",
+  "EXE",
+  "PL",
+  "RUF",
+]
+ignore = [
+  "COM",
+  "E111",
+  "E114",
+  "E117",
+  "W191",
+  "D203",
+  "D213",
+  "D401",
+  "ANN",
+  "C90",
+  "T20",
+  "ERA",
+  "TRY003",
+  "PLR2004",
+  "PLR0904",
+  "PLR0911",
+  "PLR0912",
+  "PLR0913",
+  "PLR0914",
+  "PLR0915",
+  "PLR0916",
+  "PLR0917",
+  # Intentional in this Isaac Sim / RL MWE (one-offs use targeted # noqa instead):
+  "N802",     # math-symbol function names (e.g. motor_W) read better capitalized
+  "N806",     # math-symbol locals (rotation R, motor speed W) mirror the equations
+  "PLC0415",  # isaacsim imports MUST follow SimulationApp() boot -> deliberate in-function imports
+  "ARG002",   # base/override signature parity (RacingDrone.update_state keeps dt; VecEnv overrides keep indices)
+  "SLF001",   # deliberate within-package access to _members (demo<->env, env<->quad)
+  "PLR6301",  # lifecycle hooks (start/stop) intentionally take no self state
+]
+fixable = ["ALL"]
+unfixable = ["S", "PL"]
+per-file-ignores = { "tests/**" = [
+  "D",
+  "ANN",
+  "S101",
+  "T20",
+  "SLF001",
+], "**/__init__.py" = [
+  "F401",
+  "F403",
+  "D104",
+] }
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-sort-within-sections = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

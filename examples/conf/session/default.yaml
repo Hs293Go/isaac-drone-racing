@@ -1,0 +1,37 @@
+# Run session: shared sim settings + per-entrypoint demo/train blocks.
+# CLI overrides, e.g.:  python -m isaacrace.train
+# session.train.total_timesteps=4000 session.headless=true
+seed: 0
+headless: true
+max_steps: 1200
+
+demo:
+  model: null      # null -> the packaged models/race_ppo.zip
+  steps: 1200
+
+train:
+  total_timesteps: 3000000
+  learning_rate: 3.0e-4
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+  n_steps: 4096
+  batch_size: 512
+  n_epochs: 10
+  pi: [128, 128]                # policy network hidden layers
+  vf: [128, 128]                # value network hidden layers
+  log_std_init: 0.0
+  save_freq: 200000
+  domain_randomization: false   # resample drone params +-pct each episode (OQCRL-style)
+  param_dr_pct: 0.10
+
+# Front-mounted FPV camera, shown as a docked viewport in the GUI (windowed).
+# Try it with:
+# uv run python -m isaacrace.demo session.headless=false session.fpv.enabled=true
+fpv:
+  enabled: false
+  resolution: [480, 320]   # [width, height]
+  fov_deg: 90.0            # horizontal field of view
+  mount: [0.12, 0.0, 0.03] # FLU body offset (m): forward, left, up
+  tilt_deg: 25.0           # up-tilt
