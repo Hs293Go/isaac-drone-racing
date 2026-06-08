@@ -1,14 +1,10 @@
-"""Equivalence: isaacrace.dynamics.f_func vs OQCRL's symbolic (sympy) model.
-
-Ported from optimal_quad_control_RL/tests/test_quad_model_porting.py. OQCRL derives
-the 5-inch-quad equations of motion symbolically in sympy and lambdifies them to
-numpy; here we rebuild that exact symbolic reference and assert isaacrace's
-hand-written NumPy ``f_func`` matches it to floating-point tolerance, over random
-states / controls / params.
-
-Pure NumPy: imports only ``isaacrace.dynamics`` (no isaacsim), so it runs under
-plain ``pytest`` with no Isaac Sim boot.
-"""
+# Equivalence: isaacrace.dynamics.model_derivatives vs optimal_quad_control_RL's
+# symbolic (sympy) model.
+#
+# optimal_quad_control_RL derives the 5-inch-quad equations of motion symbolically in
+# sympy and lambdifies them to numpy; here we rebuild that exact symbolic reference and
+# assert our hand-written NumPy ``model_derivatives`` matches it to floating-point
+# tolerance, over random states / controls / params.
 
 import functools
 
@@ -20,12 +16,9 @@ import isaacrace.dynamics as dyn
 
 
 @functools.lru_cache(maxsize=1)
-def _symbolic_f_func():
-    """OQCRL's symbolic state derivative, lambdified to numpy (single 16-vec sample).
+def _symbolic_model_derivatives():
+    """optimal_quad_control_RL's symbolic state derivative."""
 
-    A verbatim port of the sympy derivation in OQCRL's test fixture, so it is an
-    independent ground truth for isaacrace's f_func. Cached: the lambdify is slow.
-    """
     x, y, z, vx, vy, vz, phi, theta, psi, p, q, r, w1, w2, w3, w4 = symbols(
         "x y z v_x v_y v_z phi theta psi p q r w1 w2 w3 w4"
     )
@@ -93,9 +86,10 @@ def _random_states(rng, n):
 
 
 @pytest.mark.parametrize("seed", range(6))
-def test_f_func_matches_sympy(seed):
-    """isaacrace.f_func == OQCRL symbolic f, over random states/controls/params."""
-    symbolic = _symbolic_f_func()
+def test_model_derivatives_matches_sympy(seed):
+    """Our analytic derivatives vs their symbolic derivatives, over random
+    states/controls/params."""
+    symbolic = _symbolic_model_derivatives()
     rng = np.random.default_rng(seed)
     states = _random_states(rng, 64)
     controls = rng.uniform(-1.0, 1.0, (64, 4))
@@ -108,7 +102,9 @@ def test_f_func_matches_sympy(seed):
 
     for s, u in zip(states, controls, strict=True):
         expected = np.asarray(symbolic(s, u, p_arr), dtype=float).reshape(16)
-        np.testing.assert_allclose(dyn.f_func(s, u, p), expected, rtol=1e-9, atol=1e-9)
+        np.testing.assert_allclose(
+            dyn.model_derivatives(s, u, p), expected, rtol=1e-9, atol=1e-9
+        )
 
 
 @pytest.mark.parametrize("seed", range(4))

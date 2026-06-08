@@ -5,10 +5,31 @@ optimal_quad_control_rl's validated course.
 """
 
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 
 from isaacrace.config import RaceTrackConfig
 from isaacrace.conversions import vec_enu_ned
+
+
+def _angle_rotate_point(
+    angle: NDArray, point: NDArray, inverse: bool = False
+) -> NDArray:
+    """Rotates a 2D point by the given angle (radians)."""
+    c, s = np.cos(angle), np.sin(angle)
+    if inverse:
+        s = -s
+    return np.stack(
+        [
+            c * point[..., 0] - s * point[..., 1],
+            s * point[..., 0] + c * point[..., 1],
+        ],
+        axis=-1,
+    )
+
+
+def _wrap_to_pi(angles):
+    """Wraps angles (in radians) to the range [-pi, pi]."""
+    return (angles + np.pi) % (2 * np.pi) - np.pi
 
 
 class RaceCourse:
@@ -56,7 +77,10 @@ class RaceCourse:
         return gpr, gyr
 
     def build_obs(
-        self, world_state: NDArray, target_gate: int, gates_ahead: int = 1
+        self,
+        world_state: ArrayLike,
+        target_gate: ArrayLike,
+        gates_ahead: int = 1,
     ) -> NDArray:
         """Builds the 20-dim gate-relative observations.
 
@@ -64,70 +88,99 @@ class RaceCourse:
         aerospace Euler angles.
 
         Args:
-            world_state: The 16-dim world state in aerospace (FRD/NED) convention,
-              consisting of [pos,vel,euler angles,body rates,motor_states]
-            target_gate: The index of the next gate to pass (0-based).
+            world_state: The (n_batch x 16) world state in aerospace (FRD/NED)
+              convention, consisting of [pos,vel,euler angles,body rates,motor_states]
+            target_gate: Up to n_batch indices of the next gate to pass (0-based).
             gates_ahead: The number of future gates to include in the obs (default 1).
 
         Returns:
-            A 20-dim obs consisting of [
+            A (n_batch x 20) obs consisting of [
               pos w.r.t. gate in body frame,
               vel w.r.t. gate in body frame,
               attitude w.r.t. gate (Euler angle difference),
               body_rates (direct observation),
               motor_states (direct observation),
               relative pos and yaw of the next gates (in the current gate's frame)
-              ]
+            ]
         """
-        s = world_state
-        n = self.num_gates
-        gp = self.gate_pos[target_gate % n]
-        gy = self.gate_yaw[target_gate % n]
-        rot = np.array([[np.cos(gy), np.sin(gy)], [-np.sin(gy), np.cos(gy)]])
-        obs = np.zeros(16 + 4 * gates_ahead, dtype=np.float32)
-        obs[0:2] = (s[0:2] - gp[0:2]) @ rot.T
-        obs[2] = s[2] - gp[2]
-        obs[3:5] = s[3:5] @ rot.T
-        obs[5] = s[5]
-        obs[6:8] = s[6:8]
-        yaw = (s[8] - gy) % (2 * np.pi)
-        obs[8] = (
-            yaw - 2 * np.pi
-            if yaw > np.pi
-            else (yaw + 2 * np.pi if yaw < -np.pi else yaw)
-        )
-        obs[9:12] = s[9:12]
-        obs[12:16] = s[12:16]
-        idx = (target_gate + np.arange(gates_ahead) + 1) % n
-        gate_coords = np.hstack((
-            self._gate_pos_rel[idx],
-            self._gate_yaw_rel[idx, None],
-        ))
-        obs[16 : 16 + gates_ahead * 4] = gate_coords.ravel()
+        # Ensure inputs are 2D (batch_size, features) or 1D arrays for indices
+        s = np.atleast_2d(world_state)
+        batch_dims = s.shape[0]
 
-        return obs
+        # Ensure target_gate is an array matching the batch dimension
+        target_gate = np.atleast_1d(target_gate).astype(np.int_)
+
+        wrapped_target_gate = target_gate % self.num_gates
+        gp = self.gate_pos[wrapped_target_gate]  # Shape: (batch_dims, 3)
+        gy = self.gate_yaw[wrapped_target_gate]  # Shape: (batch_dims,)
+
+        obs = np.zeros((batch_dims, 16 + 4 * gates_ahead), dtype=np.float32)
+
+        pos_diff = s[..., 0:2] - gp[..., 0:2]
+        obs[..., 0:2] = _angle_rotate_point(gy, pos_diff, inverse=True)  # Relative X/Y
+        obs[..., 2] = s[..., 2] - gp[..., 2]  # Relative Z
+        obs[..., 3:5] = _angle_rotate_point(gy, s[..., 3:5], inverse=True)  # Velocity
+        obs[..., 5] = s[..., 5]  # Velocity Z
+        obs[..., 6:8] = s[..., 6:8]  # Drone roll/pitch
+        obs[..., 8] = _wrap_to_pi(s[..., 8] - gy)  # yaw relative to the gate heading
+
+        obs[..., 9:12] = s[..., 9:12]  # Body rates
+        obs[..., 12:16] = s[..., 12:16]  # Motor states
+
+        lookahead_offsets = np.arange(1, gates_ahead + 1)
+        # Generate a grid of indices for each gate index and look-ahead offset using
+        # broadcasting addition (batch_dims x gates_ahead)
+        idx = (target_gate[:, None] + lookahead_offsets[None]) % self.num_gates
+
+        future_pos = self._gate_pos_rel[idx]  # batch_dims x gates_ahead x 3
+        future_yaw = self._gate_yaw_rel[idx, None]  # batch_dims x gates_ahead x 1
+
+        # batch_dims x gates_ahead x 4
+        gate_coords = np.concatenate((future_pos, future_yaw), axis=-1)
+
+        obs[..., 16:] = gate_coords.reshape(batch_dims, -1)
+        return obs if batch_dims > 1 else obs[0]  # Return 1D if input was 1D
 
     def gate_passed(
-        self, pos_old: NDArray, pos_new: NDArray, target_gate: int
-    ) -> tuple[bool, bool]:
+        self,
+        pos_old: ArrayLike,
+        pos_new: ArrayLike,
+        target_gate: ArrayLike,
+    ) -> tuple[NDArray[np.bool_], NDArray[np.bool_]]:
         """Tests gate-plane crossing and in window.
 
         This method only need to interact with the drone state in isaacsim to determine
         if a gate was passed, therefore it uses ENU coordinates.
 
         Args:
-            pos_old: Previous position of the drone in ENU coordinates
-            pos_new: New position of the drone in ENU coordinates
-            target_gate: The index of the gate to test against (0-based).
+            pos_old: The (n_batch x 3) previous position of the drone in ENU coordinates
+            pos_new: The (n_batch x 3) position of the drone in ENU coordinates
+            target_gate: Up to `n_batch` indices of the gate to test against (0-based).
 
         Returns:
             A tuple representing (passed, passed but outside window)
         """
-        n = self.num_gates
-        gp = self.gate_pos_enu[target_gate % n]
-        nrm = self.gate_normal_enu[target_gate % n]
-        proj_old = (pos_old[0] - gp[0]) * nrm[0] + (pos_old[1] - gp[1]) * nrm[1]
-        proj_new = (pos_new[0] - gp[0]) * nrm[0] + (pos_new[1] - gp[1]) * nrm[1]
-        crossed: bool = (proj_old < 0) and (proj_new > 0)
-        in_window = np.all(np.abs(pos_new - gp) < self.gate_size / 2).item()
-        return (crossed and in_window), (crossed and not in_window)
+        pos_old = np.asarray(pos_old)
+        pos_new = np.asarray(pos_new)
+        target_gate = np.asarray(target_gate, dtype=np.int_)
+
+        # Lookup gate properties
+        wrapped_target_gate = target_gate % self.num_gates
+        gp = self.gate_pos_enu[wrapped_target_gate]
+        nrm = self.gate_normal_enu[wrapped_target_gate]
+
+        # Project vectors onto normal
+        proj_old = np.sum((pos_old[..., :2] - gp[..., :2]) * nrm[..., :2], axis=-1)
+        proj_new = np.sum((pos_new[..., :2] - gp[..., :2]) * nrm[..., :2], axis=-1)
+
+        crossed = (proj_old < 0) & (proj_new > 0)
+        in_window = np.all(np.abs(pos_new - gp) < self.gate_size / 2, axis=-1)
+
+        passed = crossed & in_window
+        collided = crossed & ~in_window
+
+        # Extract scalar bools if the input was a single environment/scalar
+        if target_gate.ndim == 0:
+            return passed.item(), collided.item()
+
+        return passed, collided

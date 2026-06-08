@@ -1,19 +1,16 @@
-"""Faithful port of the optimal_quad_control_RL (OQCRL) 5-inch-quad dynamics.
+"""Pure numpy port of optimal_quad_control_rl's quadrotor dynamics.
 
-Faithful port of the OQCRL 5-inch-quad dynamics + motor model, as pure NumPy — so
-the Isaac Sim env can reproduce the OQCRL drone the trained policy was trained on.
-(The racecourse and the gate-relative observation live in course.py; frame
-conversions in conversions.py.).
+The quadrotor dynamics is parameterized by 23 parameters governing the
+motor-effectiveness and drag model. The drag model influences translational dynamics by
+introducing a velocity-dependent rotor drag on the body frame x/y axes. The
+motor-effectiveness model entirely replaces the classic rotational dynamics equations,
+which depend on a inertia matrix, with a more general model that directly represents the
+drone's motors' abilities to generate angular accelerations around each axis. These
+parameters are learned.
 
-OQCRL conventions: world = NED (z down), body = FRD (x fwd, y right, z down),
-euler = aerospace ZYX (phi,theta,psi). Isaac/Pegasus: world = ENU, body = FLU;
-env.py handles the ENU↔NED / FLU↔FRD swaps.
-
-The Isaac env keeps PhysX as the integrator: each control step it (1) advances the
-motor RPM state with OQCRL's first-order lag, (2) computes OQCRL's body-frame
-thrust/drag force and body angular acceleration (below), (3) applies
-force = m·accel to the PhysX body (which adds gravity) and integrates the body
-rates kinematically. So m cancels and the realized accelerations match OQCRL.
+The original implementation uses sympy to generate the dynamics code. We re-implement it
+by hand here in numpy and ensure compliance with the original in tests/test_dynamics.py.
+The numpy implementation is directly compatible with batch inputs.
 """
 
 from typing import NamedTuple
@@ -108,16 +105,19 @@ DT = 0.01  # 100 Hz, OQCRL integration step
 
 
 def _euler_kinematic_rates(angles: NDArray, body_rates: NDArray) -> NDArray:
-    """Strapdown navigation equations for ZYX Euler angles and body rates."""
-    phi, theta, _ = angles
+    """Strapdown ZYX Euler-rate equations. Batch-aware: (...,3) -> (...,3)."""
+    phi, theta = angles[..., 0], angles[..., 1]
     cph, sph = np.cos(phi), np.sin(phi)
     cth, tth = np.cos(theta), np.tan(theta)
-    p, q, r = body_rates
-    return np.array([
-        p + q * sph * tth + r * cph * tth,
-        q * cph - r * sph,
-        q * sph / cth + r * cph / cth,
-    ])
+    p, q, r = body_rates[..., 0], body_rates[..., 1], body_rates[..., 2]
+    return np.stack(
+        [
+            p + q * sph * tth + r * cph * tth,
+            q * cph - r * sph,
+            (q * sph + r * cph) / cth,
+        ],
+        axis=-1,
+    )
 
 
 def unproject_motor(w: NDArray) -> NDArray:
@@ -125,75 +125,116 @@ def unproject_motor(w: NDArray) -> NDArray:
     return (w + 1.0) / 2.0 * (W_MAX_N - W_MIN_N) + W_MIN_N
 
 
-def motor_derivative(w: NDArray, u: NDArray, p: QuadParams):
-    """Time-derivative of the *normalized* motor state (first-order lag)."""
-    p = QuadParams._make(p)
-    W = unproject_motor(w)
+def motor_derivative(
+    w: NDArray, u: NDArray, p: QuadParams | NDArray
+) -> tuple[NDArray, NDArray]:
+    """Time-derivative of the *normalized* motor state (first-order lag). Batch-aware.
 
-    # Unproject command u in [-1,1] to U in [0,1] (throttle fraction)
-    U = (np.asarray(u) + 1.0) / 2.0
-    # Compute steady-state target rad/s from command u
-    Wc = (p.w_max - p.w_min) * np.sqrt(p.k * U**2 + (1.0 - p.k) * U) + p.w_min
-    # Apply first-order lag
-    d_W = (Wc - W) / p.tau
+    Args:
+        w: (n_batch x 4) motor state in [-1,1]
+        u: (n_batch x 4) motor command in [-1,1]
+        p: Parameters of the quadrotor model as QuadParams or a (23,) array
+
+    Returns:
+        A tuple of (d_w, d_W), where d_w is the time-derivative of the normalized motor
+        state and d_W is the time-derivative of the unnormalized motor speed in rad/s.
+        Both are (n_batch x 4) arrays.
+    """
+    p = QuadParams._make(p)
+    k = np.asarray(p.k)[..., None]
+    w_min, w_max = np.asarray(p.w_min)[..., None], np.asarray(p.w_max)[..., None]
+    W = unproject_motor(w)
+    U = (np.asarray(u) + 1.0) / 2.0  # command [-1,1] -> throttle fraction [0,1]
+    Wc = (w_max - w_min) * np.sqrt(
+        k * U**2 + (1.0 - k) * U
+    ) + w_min  # steady-state rad/s
+    d_W = (Wc - W) / np.asarray(p.tau)[..., None]  # first-order lag
     return d_W / (W_MAX_N - W_MIN_N) * 2.0, d_W
 
 
-def body_force_torque_accel(w: NDArray, u: NDArray, vb, p):
-    """OQCRL thrust+drag force (FRD body, as accel) and body angular acceleration.
+def body_force_torque_accel(
+    w: NDArray, u: NDArray, vb: NDArray, p: QuadParams | NDArray
+) -> tuple[NDArray, NDArray]:
+    """Computes linear accelerations due to thrust and drag and angular acceleration.
 
     Returns (force_frd[3], torque_frd[3]) as accelerations (m/s^2, rad/s^2). vb is
-    the FRD body-frame velocity. The Isaac env multiplies these by mass / inertia
-    for PhysX.
+    the FRD body-frame velocity. The Isaac env multiplies the linear part by mass
+    for PhysX; the angular part is integrated kinematically (no inertia involved).
+
+    Args:
+        w: (n_batch x 4) The motor state in [-1,1]
+        u: (n_batch x 4) The motor command in [-1,1]
+        vb: (n_batch x 3) The body-frame velocity in m/s, used to compute drag
+        p: Parameters of the quadrotor model as QuadParams or a (23,) array
+
+    Returns:
+        A tuple of (force, torque), where force is the linear acceleration in FRD due to
+        thrust and drag, and torque is the angular acceleration in FRD due to the motor
+        thrusts and gyroscopic drag, both as (n_batch x 3) arrays.
     """
     p = QuadParams._make(p)
+    vb = np.asarray(vb)
     W = unproject_motor(w)
     _, d_W = motor_derivative(w, u, p)
-    W_sum = W.sum()
-    Wsq = W**2
+    W_sum = W.sum(axis=-1)
+    sq = W**2
 
-    force = np.array([
-        -p.k_x * vb[0] * W_sum,
-        -p.k_y * vb[1] * W_sum,
-        -p.k_w * Wsq.sum(),
-    ])
-    torque = np.array([
-        -p.k_p1 * Wsq[0] - p.k_p2 * Wsq[1] + p.k_p3 * Wsq[2] + p.k_p4 * Wsq[3],
-        -p.k_q1 * Wsq[0] + p.k_q2 * Wsq[1] - p.k_q3 * Wsq[2] + p.k_q4 * Wsq[3],
-        (
-            -p.k_r1 * W[0]
-            + p.k_r2 * W[1]
-            + p.k_r3 * W[2]
-            - p.k_r4 * W[3]
-            - p.k_r5 * d_W[0]
-            + p.k_r6 * d_W[1]
-            + p.k_r7 * d_W[2]
-            - p.k_r8 * d_W[3]
-        ),
-    ])
+    force = np.stack(
+        [
+            -p.k_x * vb[..., 0] * W_sum,
+            -p.k_y * vb[..., 1] * W_sum,
+            -p.k_w * sq.sum(axis=-1),
+        ],
+        axis=-1,
+    )
+    torque = np.stack(
+        [
+            -p.k_p1 * sq[..., 0]
+            - p.k_p2 * sq[..., 1]
+            + p.k_p3 * sq[..., 2]
+            + p.k_p4 * sq[..., 3],
+            -p.k_q1 * sq[..., 0]
+            + p.k_q2 * sq[..., 1]
+            - p.k_q3 * sq[..., 2]
+            + p.k_q4 * sq[..., 3],
+            -p.k_r1 * W[..., 0]
+            + p.k_r2 * W[..., 1]
+            + p.k_r3 * W[..., 2]
+            - p.k_r4 * W[..., 3]
+            - p.k_r5 * d_W[..., 0]
+            + p.k_r6 * d_W[..., 1]
+            + p.k_r7 * d_W[..., 2]
+            - p.k_r8 * d_W[..., 3],
+        ],
+        axis=-1,
+    )
     return force, torque
 
 
-def f_func(state, u, p):
-    """Full OQCRL state derivative (16-dim, NED-FRD), for validation.
+def model_derivatives(state: NDArray, u: NDArray, p: QuadParams) -> NDArray:
+    """16-state system dynamics according to `optimal_quad_control_RL`.
 
-    For validation against the golden dump.
-    state = [x,y,z, vx,vy,vz, phi,theta,psi, p,q,r, w1,w2,w3,w4]
-    (NED world / normalized motors).
+    Args:
+        state: The (n_batch x 16) model state consisting of
+          [pos,vel,euler angles,body rates,motor_states]
+        u: (n_batch x 4) The motor command in [-1,1]
+        p: Parameters of the quadrotor model
+
+    Returns:
+        The (n_batch x 16) time-derivative of the state, in the same format as the input
+        state.
     """
-    vel = state[3:6]
-    angles = state[6:9]
-    body_rates = state[9:12]
-    w = state[12:16]
-    rot = Rotation.from_euler("xyz", angles)
+    state = np.asarray(state, dtype=float)
+    vel, angles = state[..., 3:6], state[..., 6:9]
+    rot = Rotation.from_euler("xyz", angles)  # body(FRD)->world(NED); single or batch
     vb = rot.inv().apply(vel)
-    force, torque = body_force_torque_accel(w, u, vb, p)
-    d_w, _ = motor_derivative(w, u, p)
-    out = np.empty(16)
-    out[0:3] = vel
-    out[3:6] = rot.apply(force)
-    out[5] += G
-    out[6:9] = _euler_kinematic_rates(angles, body_rates)
-    out[9:12] = torque
-    out[12:16] = d_w
+    force, torque = body_force_torque_accel(state[..., 12:16], u, vb, p)
+    d_w, _ = motor_derivative(state[..., 12:16], u, p)
+    out = np.empty_like(state)
+    out[..., 0:3] = vel
+    out[..., 3:6] = rot.apply(force)
+    out[..., 5] += G
+    out[..., 6:9] = _euler_kinematic_rates(angles, state[..., 9:12])
+    out[..., 9:12] = torque
+    out[..., 12:16] = d_w
     return out
