@@ -25,14 +25,10 @@ class FpvCamera:
         ``__init__``): adding the prim is a stage-structure change that would
         invalidate the physics tensor view if done later.
 
-        Arguments
-        ---------
-        stage: Usd.Stage
-            The USD stage to define the camera on.
-        parent_prim_path: str
-            The drone prim path (the camera mounts on ``/body``).
-        config: FpvConfig
-            A FpvConfig object containing mount / tilt_deg / fov_deg / resolution.
+        Args:
+            stage: The USD stage to define the camera on.
+            parent_prim_path: The drone prim path (the camera mounts on ``/body``).
+            config: A FpvConfig object containing mount/tilt_deg/fov_deg/resolution.
         """
         self.path = parent_prim_path + "/body/fpv_cam"
         cam = UsdGeom.Camera.Define(stage, self.path)

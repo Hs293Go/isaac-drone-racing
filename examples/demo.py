@@ -1,10 +1,10 @@
 """Demo: fly a trained policy through the racecourse and report gates cleared.
 
     env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES \
-        uv run python -m isaacrace.demo                       # windowed
+        uv run python examples/demo.py session.headless=false      # windowed
     env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES \
-        uv run python -m isaacrace.demo session.headless=true
-    ... uv run python -m isaacrace.demo \
+        uv run python examples/demo.py                             # headless
+    ... uv run python examples/demo.py \
         session.demo.model=/path/to/model.zip track=figure8
 
 Config lives in conf/ (track + session groups, see conf/config.yaml); override on

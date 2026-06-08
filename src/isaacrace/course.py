@@ -1,10 +1,7 @@
-"""RaceCourse — the gate racecourse, built from a (hydra) RaceTrackConfig.
+"""The gate racecourse, built from a (hydra) RaceTrackConfig.
 
-Owns the gate geometry in both frames so the env stays config-driven (swap
-conf/track/*.yaml to race a different course): the policy's NED frame for the
-gate-relative observation (build_obs), and Isaac's ENU frame for spawning +
-gate-pass tests. The math mirrors the validated OQCRL course exactly, so the
-trained racer flies unchanged on the default figure-8.
+This is a configuration driven representation of the racecourse geometry ported from
+optimal_quad_control_rl's validated course.
 """
 
 import numpy as np
@@ -15,9 +12,10 @@ from isaacrace.conversions import vec_enu_ned
 
 
 class RaceCourse:
-    """A gate racecourse built from a RaceTrackConfig, in both NED and ENU frames."""
+    """A gate racecourse built from a RaceTrackConfig."""
 
     def __init__(self, cfg: RaceTrackConfig):
+        """Initializes the racecourse geometry from the config."""
         self.gate_pos = np.asarray(cfg.gate_pos, dtype=np.float32)  # NED [N,3]
         scale = np.pi / 2.0 if cfg.gate_yaw_unit == "multiples_pi_2" else 1.0
         self.gate_yaw = (
@@ -27,6 +25,7 @@ class RaceCourse:
         self.gate_size = float(cfg.gate_size)
         self.num_gates = int(self.gate_pos.shape[0])
         self._gate_pos_rel, self._gate_yaw_rel = self._relatives()  # NED, for build_obs
+
         # ENU (env-native): gate centres, "through" normals, headings, start.
         self.gate_pos_enu = vec_enu_ned(self.gate_pos).astype(np.float32)
         self.gate_normal_enu = np.stack([
@@ -56,8 +55,30 @@ class RaceCourse:
             )
         return gpr, gyr
 
-    def build_obs(self, world_state: NDArray, target_gate: int, gates_ahead: int = 1):
-        """OQCRL 20-dim gate-relative obs from a NED-FRD world state + target gate."""
+    def build_obs(
+        self, world_state: NDArray, target_gate: int, gates_ahead: int = 1
+    ) -> NDArray:
+        """Builds the 20-dim gate-relative observations.
+
+        This method outputs the RL observation, therefore it uses NED coordinates and
+        aerospace Euler angles.
+
+        Args:
+            world_state: The 16-dim world state in aerospace (FRD/NED) convention,
+              consisting of [pos,vel,euler angles,body rates,motor_states]
+            target_gate: The index of the next gate to pass (0-based).
+            gates_ahead: The number of future gates to include in the obs (default 1).
+
+        Returns:
+            A 20-dim obs consisting of [
+              pos w.r.t. gate in body frame,
+              vel w.r.t. gate in body frame,
+              attitude w.r.t. gate (Euler angle difference),
+              body_rates (direct observation),
+              motor_states (direct observation),
+              relative pos and yaw of the next gates (in the current gate's frame)
+              ]
+        """
         s = world_state
         n = self.num_gates
         gp = self.gate_pos[target_gate % n]
@@ -86,13 +107,27 @@ class RaceCourse:
 
         return obs
 
-    def gate_passed(self, pos_old, pos_new, target_gate):
-        """ENU gate-plane crossing + window test. Returns (passed, collided)."""
+    def gate_passed(
+        self, pos_old: NDArray, pos_new: NDArray, target_gate: int
+    ) -> tuple[bool, bool]:
+        """Tests gate-plane crossing and in window.
+
+        This method only need to interact with the drone state in isaacsim to determine
+        if a gate was passed, therefore it uses ENU coordinates.
+
+        Args:
+            pos_old: Previous position of the drone in ENU coordinates
+            pos_new: New position of the drone in ENU coordinates
+            target_gate: The index of the gate to test against (0-based).
+
+        Returns:
+            A tuple representing (passed, passed but outside window)
+        """
         n = self.num_gates
         gp = self.gate_pos_enu[target_gate % n]
         nrm = self.gate_normal_enu[target_gate % n]
         proj_old = (pos_old[0] - gp[0]) * nrm[0] + (pos_old[1] - gp[1]) * nrm[1]
         proj_new = (pos_new[0] - gp[0]) * nrm[0] + (pos_new[1] - gp[1]) * nrm[1]
-        crossed = (proj_old < 0) and (proj_new > 0)
-        in_window = np.all(np.abs(pos_new - gp) < self.gate_size / 2)
+        crossed: bool = (proj_old < 0) and (proj_new > 0)
+        in_window = np.all(np.abs(pos_new - gp) < self.gate_size / 2).item()
         return (crossed and in_window), (crossed and not in_window)

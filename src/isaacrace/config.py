@@ -1,10 +1,8 @@
 """Config schemas for the racecourse (`track` group) and run session.
 
-Plain dataclasses — hydra composes conf/*.yaml into a DictConfig; ``from_dict``
-builds these from it (via ``OmegaConf.to_container``). Stdlib-only and
-import-light (no numpy/isaacsim), so configs load without booting Isaac. (OQCRL
-uses pydantic here; for this MWE, validating a few trusted config files doesn't
-warrant the heavier dependency — omegaconf already coerces types.)
+Plain dataclasses — hydra composes conf/*.yaml into a DictConfig; ``from_dict`` builds
+these from it (via ``OmegaConf.to_container``). These configurations objects are
+Stdlib-only and import-light (no numpy/isaacsim), so configs load without booting Isaac.
 """
 
 from dataclasses import dataclass, field
@@ -12,7 +10,11 @@ from dataclasses import dataclass, field
 
 @dataclass
 class RaceTrackConfig:
-    """A gate racecourse in the OQCRL NED frame (z down; gates at z=-1.5 => 1.5m up)."""
+    """A racecourse consisting of uniformly sized gates.
+
+    The gates are specified by their center locations in NED coordinates and a yaw angle
+    (heading) that defines the gate plane's normal vector.
+    """
 
     gate_pos: list[list[float]]  # [N][3] NED gate centres
     gate_yaw: list[float]  # [N] gate headings (units per gate_yaw_unit)

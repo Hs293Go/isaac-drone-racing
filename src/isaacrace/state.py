@@ -1,5 +1,4 @@
-"""
-State: rigid-body state of the drone.
+"""State: rigid-body state of the drone.
 
 This is structurally equivalent to Pegasus's `pegasus/simulator/logic/state.py` in terms
 of field naming and semantics. However, we switch to a dataclass and we treat it as a

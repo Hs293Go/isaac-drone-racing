@@ -1,34 +1,33 @@
-"""RaceEnv — a Gymnasium env: a Quadrotor racing a figure-8 gate course.
+"""RaceEnv — a Gymnasium env: a Quadrotor racing a figure-8 gate course in Isaac Sim.
 
 The env is a thin gym wrapper around the drone: it owns the World, the scene
-(lighting/ground/gates), the RaceCourse, and the gym loop + reward/termination —
-and delegates everything drone-shaped to a `RacingDrone` (which owns the drone
-prim, a first-class FPV `camera`, the `State`, and the OQCRL faithful physics; see
-quadrotor.py). The env drives the drone explicitly each step (apply_disc_control ->
-world.step -> update_state) instead of via World physics callbacks, because the RL
-action must be injected per step.
+(lighting/ground/gates), the RaceCourse, and the gym loop. The drone, represented by
+RacingDrone (see quadrotor.py), owns the physics state and dynamics. The env drives the
+drone explicitly each step (apply_disc_control -> world.step -> update_state) instead of
+via World physics callbacks, because the RL action must be injected per step.
 
-Frames: the env is ENU-native (Isaac's world) — gates, reward, reset, and bounds
-are all ENU/FLU. The lone NED is inside the observation (the trained policies are
-forever-NED): _ned_obs_state reads the quad's State through its NED-FRD accessors
-and feeds build_obs, and nowhere else.
+Since this env interacts with Isaac, it uses an ENU-native convention for gates, reward,
+reset, and bounds. NED appears only at the observation boundary (_ned_obs_state) and in
+converting the shared NED spawn sampler's output in reset() (the trained policies are
+NED).
 
 A SimulationApp must already be running before this module's isaacsim imports
 execute (see demo/train).
 """
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import gymnasium as gym
 from gymnasium import spaces
 from isaacsim.core.api.world import World
 from isaacsim.core.utils.prims import define_prim, get_prim_at_path
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 import omni.timeline
 from pxr import Gf, UsdGeom, UsdLux
 from scipy.spatial.transform import Rotation
 
+from isaacrace.config import FpvConfig
 from isaacrace.conversions import quat_aero_isaac, vec_enu_ned, vec_flu_frd
 from isaacrace.course import RaceCourse
 import isaacrace.dynamics as dyn
@@ -36,9 +35,12 @@ from isaacrace.quadrotor import RacingDrone
 
 
 class RaceEnv(gym.Env):
-    """obs: 20-dim gate-relative state (pos/vel/att/rates/rpms + next gate).
+    """Environment for a single drone racing in Isaac Sim.
 
-    action: 4 motor cmds in [-1,1].
+    This environment lets the RacingDrone object manage its state vector internally. Its
+    primary public method `step` takes a (4,) action of normalized motor commands and
+    returns a (20,) observation of the drone's state in addition to a scalar reward,
+    done/truncated flags, and an info dict.
     """
 
     metadata: ClassVar[dict] = {"render_modes": ["human"]}
@@ -46,14 +48,31 @@ class RaceEnv(gym.Env):
     def __init__(
         self,
         course: RaceCourse,
-        headless=True,
-        randomize_reset=True,
-        seed=0,
-        max_steps=1200,
-        fpv=None,
-        randomize_params=False,
-        param_dr_pct=0.1,
+        headless: bool = True,
+        randomize_reset: bool = True,
+        seed: int = 0,
+        max_steps: int = 1200,
+        fpv: FpvConfig | None = None,
+        randomize_params: bool = False,
+        param_dr_pct: float = 0.1,
     ):
+        """Initialize the racing environment.
+
+        This spawns the scene (lighting, ground, gates) and the drone, and initializes
+        the physics world. The drone is reset to the start pose.
+
+        Args:
+            course: the RaceCourse defining the gate layout and obs construction.
+            headless: if True, disable rendering (for faster training).
+            randomize_reset: if True, randomize the drone's start pose each episode.
+            seed: random seed for reset randomization (obs and params).
+            max_steps: max steps per episode (for truncation).
+            fpv: if not None, config for the drone's FPV camera.
+            randomize_params: if True, apply domain randomization to the drone's model
+                parameters each episode (in reset); see param_dr_pct.
+            param_dr_pct: if randomize_params, the ±% range to sample each parameter
+                around its nominal value (e.g. 0.1 = ±10%).
+        """
         super().__init__()
         self.course = course
         self.randomize_reset = randomize_reset
@@ -179,9 +198,8 @@ class RaceEnv(gym.Env):
     def _ned_obs_state(self) -> NDArray:
         """Assemble the NED-FRD 16-vector build_obs expects.
 
-        From the quad's State + rotor speeds. This is the single place the
-        forever-NED policy convention is honored; byte-identical to the old env, so
-        the vendored racer flies unchanged.
+        From the quad's State + rotor speeds. This honors the NED policy convention to
+        output a RL-compatible observation.
         """
         s = self.quad.state
         out = np.empty(16)
@@ -196,8 +214,25 @@ class RaceEnv(gym.Env):
         self._obs = self.course.build_obs(self._ned_obs_state(), self.target_gate)
 
     # ------------------------------------------------------------------ gym API
-    def step(self, action):
-        """Advance one control step; return the gym 5-tuple."""
+    def step(
+        self, action: ArrayLike
+    ) -> tuple[NDArray, np.float32, bool, bool, dict[str, Any]]:
+        """Advance one control step.
+
+        Args:
+            action: (4,) array-like of normalized motor commands in [-1, 1].
+
+        Returns:
+            obs: (20,) observation vector of the drone's state relative to the target
+              gate (see course.build_obs for details).
+            reward: scalar reward (positive for progress toward the target gate, plus
+              optional shaping terms; negative for crashing).
+            terminated: True if the episode ended due to drone crash or out-of-bounds.
+            truncated: True if the episode ended due to max_steps.
+            info: dict with extra info (e.g. whether the gate was passed, collision,
+              visibility reward, etc) for logging/debugging but not needed by the
+              policy.
+        """
         actions = np.asarray(action, dtype=np.float32).reshape(4)
         pos_old = self.quad.state.position.copy()
 
@@ -228,14 +263,27 @@ class RaceEnv(gym.Env):
         }
         return self._obs, np.float32(reward), terminated, truncated, info
 
-    def reset(self, seed=None, options=None):
-        """Reset the drone to a (optionally randomized) start; return (obs, info)."""
-        super().reset(seed=seed)
+    def reset(
+        self, seed: int | None = None, options: dict[str, Any] | None = None
+    ) -> tuple[NDArray, dict[str, Any]]:
+        """Reset the drone to a (optionally randomized) start.
+
+        Args:
+            seed: random seed for reset randomization (obs and params).
+            options: gym API reset options (forwarded to super().reset but not used)
+
+        Returns:
+            obs: (20,) observation vector of the drone's state relative to the target
+              gate (see course.build_obs for details).
+            info: dict with extra info for logging/debugging but not needed by the
+              policy (empty in this implementation).
+        """
+        super().reset(seed=seed, options=options)
         self.step_count = 0
         if self.randomize_params:
-            # Domain randomization: resample the drone's OQCRL params each episode so
-            # the policy learns to fly across the param distribution (obs is unchanged
-            # — gate-relative — so the policy is robust but not param-conditioned).
+            # Domain randomization: resample the drone's parameters each episode so the
+            # policy learns to fly across the param distribution (obs is unchanged —
+            # gate-relative — so the policy is robust but not param-conditioned).
             self.quad.params = np.asarray(
                 self.p.randomized(self.rng, self.param_dr_pct)
             )

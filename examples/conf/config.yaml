@@ -1,5 +1,5 @@
 # Top-level hydra config: compose a racecourse (track group) and a run session (session group).
-# Override on the CLI, e.g.:  python -m isaacrace.demo track=figure8 session.headless=false
+# Override on the CLI, e.g.:  uv run python examples/demo.py track=figure8 session.headless=false
 defaults:
   - track: figure8
   - session: default

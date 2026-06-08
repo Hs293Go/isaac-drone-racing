@@ -1,20 +1,10 @@
 """RacingDrone — the drone vehicle.
 
-We borrow Pegasus's vehicle shape — a `Robot` subclass that owns the drone prim,
-a `State`, a first-class FPV `camera`, and `apply_force` / `update_state` methods —
-but only the subset isaacrace uses. Dropped as unused
-cruft: backends, the thrust-curve / drag / control-allocation objects (isaacrace's
-physics is the analytic OQCRL model in dynamics.py), the SimContext/VehicleManager
-singletons, the World physics-callback registration (gym drives the loop
-explicitly so it can inject the RL action), and the joint-driven propeller
-animation (we spin the prop *mesh*, decoupled from dynamics).
-
-The faithful physics is unchanged from the old monolithic env: PhysX integrates
-translation (F = m·a body force; PhysX adds gravity) while rotation is integrated
-kinematically — the analytic angular accel advances the body rates one step and is
-written straight to the rigid body. Poses are set via dynamic_control (not the
-Robot tensor view), which the per-step rotor-mesh op.Set would otherwise
-invalidate.
+Our racing drone is heavily inspired from Pegasus Simulator's vehicle abstraction and
+follows its examples in managing the USD assets, and implementing physical actuation via
+dynamic_control and state updates. However, we implement a concrete racing drone instead
+of a hierarchy of vehicles since this codebase is focused on racing. We also discard
+support for multi-vehicle registration.
 """
 
 from pathlib import Path
@@ -64,23 +54,16 @@ class RacingDrone(Robot):
     ):
         """Construct the racing drone.
 
-        Arguments
-        ---------
-        world: World
-            The Isaac Sim World (already created; reset() is the caller's
-            responsibility, AFTER this).
-        init_pos: ArrayLike
-            The spawn position of the drone's body in the world frame (ENU); the real
-            spawn pose is set each episode in env.reset().
-        params: ArrayLike
-            The OQCRL parameter vector (dynamics.params_vec()).
-        fpv: FpvConfig | None
-            Optional FPV camera config; when enabled, a drone.camera is created here,
-            before reset().
-        stage_prefix: str
-            USD path for the drone.
-        usd_file: str
-            The vendored Iris USD.
+        Arg:
+            world: The Isaac Sim World (already created; reset() is the caller's
+              responsibility, AFTER this).
+            init_pos: The spawn position of the drone's body in the world frame (ENU);
+              the real spawn pose is set each episode in env.reset().
+            params: The RL parameter vector (dynamics.params_vec()).
+            fpv: Optional FPV camera config; when enabled, a drone.camera is created
+              here, before reset().
+            stage_prefix: USD path for the drone.
+            usd_file: The vendored Iris USD.
         """
         # Reference the drone USD onto a fresh prim, then wrap it as a Robot
         # (orientation is w-first for NVIDIA's convention; the level spawn here is
@@ -129,7 +112,8 @@ class RacingDrone(Robot):
                 self.stage_prefix + "/body"
             )
             self.mass = float(
-                self.get_dc_interface()
+                self
+                .get_dc_interface()
                 .get_rigid_body_properties(self._body_handle_cache)
                 .mass
             )
@@ -138,8 +122,8 @@ class RacingDrone(Robot):
     def update_state(self, _dt: float = 0.0):
         """Reads pose and velocities from PhysX into self.state with frame conversions.
 
-        This mirrors Pegasus update_state without using the time step, since we don't a
-        finite-diff acceleration.
+        This mirrors Pegasus update_state without using the time step, since we don't
+        need a finite-diff acceleration.
         """
         dc = self.get_dc_interface()
         body = self._body()
@@ -155,21 +139,16 @@ class RacingDrone(Robot):
     def apply_force(
         self, force: ArrayLike, pos: ArrayLike = (0.0, 0.0, 0.0), body_part="/body"
     ):
-        """
-        Apply a body-frame force to a rigid body part.
+        """Apply a body-frame force to a rigid body part.
 
-        Arguments
-        ---------
-        force: ArrayLike
-            A 3D vector representing the force to be applied, expressed in the body
-            frame of the drone (FLU convention).
-        pos: ArrayLike
-            A 3D vector representing the position of the application point of the force
-            relative to the center of mass of the body part, expressed in the body frame
-            of the drone (FLU convention).
-        body_part: str
-            The path to the body part to which the force should be applied, relative to
-            the drone's stage prefix.
+        Args:
+            force: A 3D vector representing the force to be applied, expressed in the
+              body frame of the drone (FLU convention).
+            pos: A 3D vector representing the position of the application point of the
+              force relative to the center of mass of the body part, expressed in the
+              body frame of the drone (FLU convention).
+            body_part: The path to the body part to which the force should be applied,
+              relative to the drone's stage prefix.
         """
         force = _to_sized_list_float(force, 3)
         pos = _to_sized_list_float(pos, 3)
@@ -182,18 +161,14 @@ class RacingDrone(Robot):
         dc.apply_body_force(rb, carb.Float3(force), carb.Float3(pos), False)
 
     def set_pose(self, pos: ArrayLike, quat_xyzw: ArrayLike):
-        """
-        Set the body pose of the drone via dynamic_control.
+        """Set the body pose of the drone via dynamic_control.
 
-        Arguments
-        ---------
-        pos: ArrayLike
-            A 3D vector representing the position of the drone's body in the world frame
-            (ENU convention).
-        quat_xyzw: ArrayLike
-            A 4D vector representing the orientation of the drone as a quaternion in the
-            format [qx, qy, qz, qw], where qw is the scalar part, representing a body
-            (FLU)-to-world (ENU) rotation.
+        Args:
+            pos: A 3D vector representing the position of the drone's body in the world
+              frame (ENU convention).
+            quat_xyzw: A 4D vector representing the orientation of the drone as a
+              quaternion in the format [qx, qy, qz, qw], where qw is the scalar part,
+              representing a body (FLU)-to-world (ENU) rotation.
         """
         self.get_dc_interface().set_rigid_body_pose(
             self._body(),
@@ -218,24 +193,21 @@ class RacingDrone(Robot):
     # ----------------------------------------------- faithful physics (per RL step)
     #
     def apply_disc_control(self, control_actions: ArrayLike, dt: float):
-        """Advance the rotor state and apply the optimal control control for one step.
+        """Advance the rotor state; apply the model's force and rotation for one step.
 
         PhysX translation force + kinematic-rotation angular velocity. The analog
         of Pegasus's update(), but the rotor command comes from the RL `actions`
         the env injects rather than from a backend's input_reference().
 
-        Arguments
-        ---------
-        control_actions: ArrayLike
-            The 4D vector of rotor commands (normalized [-1,1]) from the RL
-            policy.
-        dt: float
-            The time step duration, used to advance the motor state and apply the
-            physics forward.
+        Args:
+            control_actions: The 4D vector of rotor commands (normalized [-1,1]) from
+              the RL policy.
+            dt: The time step duration, used to advance the motor state and apply the
+              physics forward.
         """
         self._body()  # ensure self.mass is populated
         control_actions = np.asarray(control_actions)
-        d_w, _ = dyn.motor_dwdt(self.motor_w, control_actions, self.params)
+        d_w, _ = dyn.motor_derivative(self.motor_w, control_actions, self.params)
         self.motor_w = np.clip(self.motor_w + dt * d_w, -1.0, 1.0)
 
         # Copy the operating point state for the physics
@@ -245,12 +217,12 @@ class RacingDrone(Robot):
         # Compute FRD-frame body velocity since the model uses it to compute gyroscopic
         # drag as part of the total force/torque
         vb_frd = vec_flu_frd(body2world.inv().apply(s_op.linear_velocity))
-        accel_frd, torque_frd = dyn.body_force_torque_accel(
+        accel_frd, alpha_frd = dyn.body_force_torque_accel(
             self.motor_w, control_actions, vb_frd, self.params
         )
 
         force_flu = self.mass * vec_flu_frd(accel_frd)
-        rates_flu = s_op.angular_velocity + dt * vec_flu_frd(torque_frd)
+        rates_flu = s_op.angular_velocity + dt * vec_flu_frd(alpha_frd)
         self.apply_force(force_flu)
         self.set_angular_velocity(body2world.apply(rates_flu))
         self._spin_rotors()
@@ -297,7 +269,7 @@ class RacingDrone(Robot):
         """
         if not self._rotor_ops:
             return
-        W = dyn.motor_W(self.motor_w)
+        W = dyn.unproject_motor(self.motor_w)
         self._rotor_angle = np.mod(
             self._rotor_angle + self._rotor_spin * W * dyn.DT, 2 * np.pi
         )

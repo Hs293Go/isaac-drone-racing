@@ -1,5 +1,5 @@
 # Run session: shared sim settings + per-entrypoint demo/train blocks.
-# CLI overrides, e.g.:  python -m isaacrace.train
+# CLI overrides, e.g.:  uv run python examples/train.py
 # session.train.total_timesteps=4000 session.headless=true
 seed: 0
 headless: true
@@ -28,7 +28,7 @@ train:
 
 # Front-mounted FPV camera, shown as a docked viewport in the GUI (windowed).
 # Try it with:
-# uv run python -m isaacrace.demo session.headless=false session.fpv.enabled=true
+# uv run python examples/demo.py session.headless=false session.fpv.enabled=true
 fpv:
   enabled: false
   resolution: [480, 320]   # [width, height]
