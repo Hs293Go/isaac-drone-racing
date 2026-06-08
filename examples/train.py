@@ -1,23 +1,22 @@
-"""Train a fresh PPO policy from scratch on the Isaac Sim (PhysX) race env.
+"""Train a PPO policy on the race env — batched (fast, default) or Isaac (PhysX).
 
-    env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES uv run python -m isaacrace.train
-    ... uv run python -m isaacrace.train \
-        session.train.total_timesteps=4000           # smoke test
-    ... uv run python -m isaacrace.train \
-        session.train.pi=[256,256] session.train.domain_randomization=true
+    ... uv run python examples/train.py                                  # batched, fast
+    ... uv run python examples/train.py session.train.total_timesteps=1000000
+    ... uv run python examples/train.py session.train.perception_weight=0.03
+    ... uv run python examples/train.py session.train.domain_randomization=true
+    ... uv run python examples/train.py session.train.backend=isaac      # on PhysX
 
-Hyperparameters + course come from conf/ (see conf/session/default.yaml; override
-on the CLI as above). Outputs land under ``isaacrace/train_out/``: tensorboard
-logs, ``race_ppo_*`` checkpoints, ``race_ppo_final``. Watch
-``race/gates_per_1k_steps`` (climbs from ~1 toward ~20+ as the policy learns to
-thread the gates), and ``rollout/ep_rew_mean`` (via VecMonitor).
+The default ``batched`` backend is BatchedRaceEnv: ``num_envs`` drones integrated at
+once in pure NumPy (``dyn.model_derivatives``). Without SimulationApp introducing
+stepping overhead, training completes in minutes. Its dynamics, observation, reward and
+perception term match RaceEnv by construction (shared dynamics functions + RaceCourse
+rules, same explicit-Euler step), so the policy transfers: validate / visualise it on
+Isaac with ``examples/demo.py session.demo.model=train_out/race_ppo_final``. Set
+``session.train.backend=isaac`` to train directly on PhysX (slow, on-rig fidelity).
 
-Recipe ported from OQCRL's train.py: separate pi/vf MLPs, ReLU, gamma 0.999,
-VecMonitor, tqdm progress. ``session.train.domain_randomization=true`` resamples
-the drone's OQCRL params +-``param_dr_pct`` each episode (QuadParams.randomized) so
-the policy is robust to drone variation; the observation is unchanged, so it stays
-compatible with the packaged model. ``RaceEnv`` is a standard gymnasium env, so
-DummyVecEnv wraps it directly and handles reset-on-done.
+Recipe (OQCRL): separate pi/vf MLPs, ReLU, gamma 0.999, VecMonitor, tqdm progress.
+Watch ``race/gates_per_1k_steps``, ``race/perception_visibility`` (perception toggle),
+``rollout/ep_rew_mean``. Outputs land in repo-root ``train_out/``.
 """
 
 import os
@@ -31,29 +30,30 @@ os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
-    """Entry point: train a PPO policy from scratch on the race env."""
+    """Entry point: train a PPO policy (batched backend by default, or Isaac)."""
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
+    import torch
+
     from isaacrace.config import RaceTrackConfig, SessionConfig
+    from isaacrace.course import RaceCourse
+
+    # The policy is a tiny MLP; on CPU, one thread far outruns many (PyTorch's
+    # multi-thread overhead dominates the small per-minibatch matmuls). This is the
+    # difference between ~800 and ~12k training fps with the batched VecEnv.
+    torch.set_num_threads(1)
 
     track_cfg = RaceTrackConfig.from_dict(
         OmegaConf.to_container(cfg.track, resolve=True)
     )
     session = SessionConfig.from_dict(OmegaConf.to_container(cfg.session, resolve=True))
     tcfg = session.train
-
-    from isaacsim import SimulationApp
-
-    app = SimulationApp({"headless": session.headless})
-
-    import carb
-    from isaacrace.course import RaceCourse
-    from isaacrace.env import RaceEnv
-    from stable_baselines3 import PPO
-    from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
-    from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
-    import torch
+    course = RaceCourse(track_cfg)
+    fpv = getattr(session, "fpv", None)
 
     class GateRateCallback(BaseCallback):
-        """Log the running gate-pass rate (gates per 1k env steps)."""
+        """Log the gate-pass rate (gates/1k steps) and mean perception visibility."""
 
         def __init__(self):
             super().__init__()
@@ -61,33 +61,65 @@ def main(cfg: DictConfig):
             self.steps = 0
 
         def _on_step(self):
+            vis, m = 0.0, 0
             for info in self.locals.get("infos", []):
                 self.gates += int(info.get("gate_passed", False))
                 self.steps += 1
+                vis += float(info.get("perception_visibility", 0.0))
+                m += 1
             if self.steps:
                 self.logger.record(
                     "race/gates_per_1k_steps", 1000.0 * self.gates / self.steps
                 )
+            if m:
+                self.logger.record("race/perception_visibility", vis / m)
             return True
 
     # repo-root train_out/ (this script sits at <root>/examples/, so go up 2 levels)
     out = str(Path(__file__).resolve().parents[1] / "train_out")
     Path(out).mkdir(parents=True, exist_ok=True)
-    course = RaceCourse(track_cfg)
-    # VecMonitor logs episode reward/length to tensorboard (rollout/ep_rew_mean, ...).
-    venv = VecMonitor(
-        DummyVecEnv([
-            lambda: RaceEnv(
+
+    # --- sim backend ----------------------------------------------------------
+    app = None
+    if tcfg.backend == "batched":
+        from isaacrace.env_batched import BatchedRaceEnv
+
+        venv = VecMonitor(
+            BatchedRaceEnv(
                 course,
-                headless=session.headless,
-                randomize_reset=True,
+                num_envs=tcfg.num_envs,
                 seed=session.seed,
                 max_steps=session.max_steps,
+                fpv=fpv,
                 randomize_params=tcfg.domain_randomization,
                 param_dr_pct=tcfg.param_dr_pct,
+                perception_weight=tcfg.perception_weight,
             )
-        ])
-    )
+        )
+        # Per-env rollout length sized so the buffer (num_envs * n_steps) stays a few
+        # x10k — few large PPO updates, not many tiny ones (the CPU update dominates
+        # once env-stepping is vectorized away).
+        n_steps = max(8, 32768 // tcfg.num_envs)
+    else:
+        from isaacsim import SimulationApp
+
+        app = SimulationApp({"headless": session.headless})
+        from isaacrace.env import RaceEnv
+
+        venv = VecMonitor(
+            DummyVecEnv([
+                lambda: RaceEnv(
+                    course,
+                    headless=session.headless,
+                    randomize_reset=True,
+                    seed=session.seed,
+                    max_steps=session.max_steps,
+                    randomize_params=tcfg.domain_randomization,
+                    param_dr_pct=tcfg.param_dr_pct,
+                )
+            ])
+        )
+        n_steps = tcfg.n_steps
 
     model = PPO(
         "MlpPolicy",
@@ -97,7 +129,7 @@ def main(cfg: DictConfig):
         gae_lambda=tcfg.gae_lambda,
         clip_range=tcfg.clip_range,
         ent_coef=tcfg.ent_coef,
-        n_steps=tcfg.n_steps,
+        n_steps=n_steps,
         batch_size=tcfg.batch_size,
         n_epochs=tcfg.n_epochs,
         policy_kwargs={
@@ -112,16 +144,20 @@ def main(cfg: DictConfig):
     cbs = [
         GateRateCallback(),
         CheckpointCallback(
-            save_freq=tcfg.save_freq, save_path=out, name_prefix="race_ppo"
+            save_freq=max(1, tcfg.save_freq // venv.num_envs),
+            save_path=out,
+            name_prefix="race_ppo",
         ),
     ]
     model.learn(total_timesteps=tcfg.total_timesteps, callback=cbs, progress_bar=True)
     model.save(str(Path(out) / "race_ppo_final"))
-    carb.log_warn(
-        f"[train] done; saved {out}/race_ppo_final ({tcfg.total_timesteps} steps)"
+    print(
+        f"[train] done ({tcfg.backend}); saved {out}/race_ppo_final "
+        f"({tcfg.total_timesteps} steps)"
     )
 
-    app.close()
+    if app is not None:
+        app.close()
 
 
 if __name__ == "__main__":
