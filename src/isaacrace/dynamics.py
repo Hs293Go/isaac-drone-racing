@@ -24,8 +24,7 @@ from scipy.spatial.transform import Rotation
 
 
 class QuadParams(NamedTuple):
-    """
-    Quadrotor parameters govering the motor-effectiveness and drag model.
+    """Quadrotor parameters governing the motor-effectiveness and drag model.
 
     While optimal_quad_control_rl uses a 23-vector of parameters, we wrap it in a
     NamedTuple for clarity so we don't need to maintain a separate list of names. The
@@ -121,19 +120,21 @@ def _euler_kinematic_rates(angles: NDArray, body_rates: NDArray) -> NDArray:
     ])
 
 
-# ------------------------------------------------------------- motor + force model
-def motor_W(w):
-    """Normalized motor state w in [-1,1] -> actual rad/s W in [w_min_n, w_max_n]."""
+def unproject_motor(w: NDArray) -> NDArray:
+    """Unprojects motor state `w` in [-1,1] to actual rad/s in [w_min_n, w_max_n]."""
     return (w + 1.0) / 2.0 * (W_MAX_N - W_MIN_N) + W_MIN_N
 
 
-def motor_dwdt(w, u, p):
+def motor_derivative(w: NDArray, u: NDArray, p: QuadParams):
     """Time-derivative of the *normalized* motor state (first-order lag)."""
     p = QuadParams._make(p)
-    W = motor_W(w)
+    W = unproject_motor(w)
+
+    # Unproject command u in [-1,1] to U in [0,1] (throttle fraction)
     U = (np.asarray(u) + 1.0) / 2.0
-    # steady-state target rad/s, then first-order lag toward it
+    # Compute steady-state target rad/s from command u
     Wc = (p.w_max - p.w_min) * np.sqrt(p.k * U**2 + (1.0 - p.k) * U) + p.w_min
+    # Apply first-order lag
     d_W = (Wc - W) / p.tau
     return d_W / (W_MAX_N - W_MIN_N) * 2.0, d_W
 
