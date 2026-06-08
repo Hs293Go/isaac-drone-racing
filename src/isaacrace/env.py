@@ -60,7 +60,7 @@ class RaceEnv(gym.Env):
         self.randomize_params = randomize_params
         self.param_dr_pct = param_dr_pct
         self.rng = np.random.default_rng(seed)
-        self.p = dyn.params_vec()
+        self.p = dyn.PARAMS_5INCH
         self.dt = dyn.DT
         self.max_steps = max_steps
 

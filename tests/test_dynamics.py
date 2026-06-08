@@ -12,10 +12,11 @@ plain ``pytest`` with no Isaac Sim boot.
 
 import functools
 
-import isaacrace.dynamics as dyn
 import numpy as np
 import pytest
 from sympy import Array, Matrix, cos, lambdify, sin, sqrt, symbols, tan
+
+import isaacrace.dynamics as dyn
 
 
 @functools.lru_cache(maxsize=1)
@@ -100,7 +101,7 @@ def test_f_func_matches_sympy(seed):
     controls = rng.uniform(-1.0, 1.0, (64, 4))
     # nominal 5-inch params on even seeds; +-10% randomized on odd seeds (the
     # equivalence must hold for any params, not just the nominal set).
-    p = dyn.params_vec()
+    p = dyn.PARAMS_5INCH
     if seed % 2:
         p = p.scaled(rng.uniform(0.9, 1.1, len(p)))
     p_arr = np.asarray(p)
@@ -114,13 +115,15 @@ def test_f_func_matches_sympy(seed):
 def test_randomized_params_in_bounds(seed):
     """Domain randomization keeps each param within +-pct and k a valid fraction."""
     rng = np.random.default_rng(seed)
-    base = dyn.params_vec()
+    base = dyn.PARAMS_5INCH
     pct = 0.2
     p = base.randomized(rng, pct)
     assert isinstance(p, dyn.QuadParams)
     assert 0.0 < p.k <= 1.0
     ratio = np.asarray(p) / np.asarray(base)
     # k may be clamped below 1+pct; every other field stays within [1-pct, 1+pct].
-    others = [r for f, r in zip(dyn.PARAM_NAMES, ratio, strict=True) if f != "k"]
-    assert np.all(np.asarray(others) >= 1.0 - pct - 1e-9)
-    assert np.all(np.asarray(others) <= 1.0 + pct + 1e-9)
+    others = np.array([
+        v for k, v in zip(dyn.QuadParams._fields, ratio, strict=True) if k != "k"
+    ])
+    assert np.all(others >= 1.0 - pct - 1e-9)
+    assert np.all(others <= 1.0 + pct + 1e-9)
