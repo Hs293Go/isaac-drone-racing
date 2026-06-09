@@ -6,6 +6,7 @@ Stdlib-only and import-light (no numpy/isaacsim), so configs load without bootin
 """
 
 from dataclasses import dataclass, field
+import math
 
 
 @dataclass
@@ -21,11 +22,25 @@ class RaceTrackConfig:
     start_pos: list[float]  # [3] NED start position
     gate_yaw_unit: str = "multiples_pi_2"  # "multiples_pi_2" or "radians"
     gate_size: float = 1.5  # gate window side length (m)
+    # Horizontal (x/y) distance from the center beyond which the drone is out of bounds
+    bound_xy: float = 5.0
+    # Vertical (z) distance above which the drone is out of bounds
+    bound_z: float = 7.0
 
     @classmethod
     def from_dict(cls, d: dict) -> "RaceTrackConfig":
         """Build a ``RaceTrackConfig`` from a plain dict."""
         return cls(**d)
+
+
+@dataclass
+class RandomSpawnConfig:
+    """Parameters to randomize a drone's initial pose relative to a gate."""
+
+    dist_back: float = 1.0  # m before the gate along -through
+    vel_bounds: float = 0.5  # uniform +/- on each ENU velocity component
+    tilt_bounds: float = math.pi / 9  # uniform +/- on roll, pitch
+    rate_bounds: float = 0.1  # uniform +/- on each body rate
 
 
 @dataclass

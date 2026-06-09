@@ -104,21 +104,9 @@ class BatchedRaceEnv(VecEnv):
                 self.params_arr[j] = np.asarray(
                     dyn.PARAMS_5INCH.randomized(self.rng, self.param_dr_pct)
                 )
-        g = self.rng.integers(0, self.course.num_gates, m)
+        g, state = self.course.sample_spawn(self.rng, m, randomize=True)
         self.target_gate[idx] = g
-        # 1 m before the gate, along -through-direction (ENU -> NED)
-        pos_enu = self.course.gate_pos_enu[g].astype(
-            float
-        ) - self.course.gate_normal_enu[g].astype(float)
-        s = np.zeros((m, 16))
-        s[:, 0:3] = vec_enu_ned(pos_enu)
-        s[:, 3:6] = vec_enu_ned(self.rng.uniform(-0.5, 0.5, (m, 3)))
-        s[:, 6] = self.rng.uniform(-np.pi / 9, np.pi / 9, m)
-        s[:, 7] = self.rng.uniform(-np.pi / 9, np.pi / 9, m)
-        s[:, 8] = self.rng.uniform(-np.pi, np.pi, m)
-        s[:, 9:12] = self.rng.uniform(-0.1, 0.1, (m, 3))
-        s[:, 12:16] = self.rng.uniform(-1.0, 1.0, (m, 4))
-        self.state[idx] = s
+        self.state[idx] = state
         self.step_count[idx] = 0
 
     # ----------------------------------------------------------- VecEnv API
@@ -156,11 +144,10 @@ class BatchedRaceEnv(VecEnv):
         self.step_count += 1
 
         pos_new = vec_enu_ned(self.state[:, 0:3])
-        gp = self.course.gate_pos_enu[self.target_gate % num]
-        reward = np.linalg.norm(pos_old - gp, axis=-1) - np.linalg.norm(
-            pos_new - gp, axis=-1
+        reward = self.course.progress(pos_old, pos_new, self.target_gate)
+        reward -= self.course.RATE_PENALTY * np.linalg.norm(
+            self.state[:, 9:12], axis=-1
         )
-        reward -= 0.001 * np.linalg.norm(self.state[:, 9:12], axis=-1)
 
         # perception visibility (always measured for logging; rewarded only if on)
         gate_ned = self.course.gate_pos[self.target_gate % num]
@@ -171,13 +158,9 @@ class BatchedRaceEnv(VecEnv):
         reward += self.perception_weight * vis  # gate-visibility shaping (0 = off)
 
         passed, collided = self.course.gate_passed(pos_old, pos_new, self.target_gate)
-        self.target_gate = np.where(
-            passed, (self.target_gate + 1) % num, self.target_gate
-        )
-        ground = pos_new[:, 2] < 0.0
-        oob = (np.abs(pos_new[:, 0:2]) > 5).any(axis=-1) | (pos_new[:, 2] > 7)
-        crashed = ground | oob | collided
-        reward = np.where(crashed, -10.0, reward)
+        self.target_gate = self.course.advance_gate(self.target_gate, passed)
+        crashed = self.course.out_of_bounds(pos_new) | collided
+        reward = np.where(crashed, self.course.CRASH_REWARD, reward)
         terminated = crashed
         truncated = self.step_count >= self.max_steps
         dones = terminated | truncated

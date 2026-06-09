@@ -50,6 +50,20 @@ def test_batched_env_determinism():
     np.testing.assert_array_equal(a.step_wait()[0], b.step_wait()[0])
 
 
+def test_batched_env_spawns_are_randomized():
+    # Regression guard: every env must get its OWN jittered spawn. A bug where the
+    # batched reset falls through to the deterministic start (gate 0, level, zero
+    # vel/rates) is invisible to the smoke/determinism tests but silently kills
+    # training-spawn diversity, so assert it directly.
+    env = BatchedRaceEnv(_course(), num_envs=16, seed=0)
+    obs = env.reset()
+    # rows differ from each other (not all collapsed onto one fixed pose)
+    assert not np.all(obs == obs[0]), "all envs spawned at the identical pose"
+    # the jitter (random gate / velocity / tilt / rates) is actually applied
+    assert env.target_gate.max() > 0, "all envs spawned at gate 0 (no random gate)"
+    assert np.abs(env.state[:, 3:12]).sum() > 0.0, "spawn vel/tilt/rates all zero"
+
+
 def test_batched_env_auto_reset():
     # max_steps=1 -> every env is done after one step; obs is the (reset) next obs and
     # info carries the terminal observation (the sb3 VecEnv auto-reset contract).

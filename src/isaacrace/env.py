@@ -27,6 +27,7 @@ import omni.timeline
 from pxr import Gf, UsdGeom, UsdLux
 from scipy.spatial.transform import Rotation
 
+from isaacrace import perception
 from isaacrace.config import FpvConfig
 from isaacrace.conversions import quat_aero_isaac, vec_enu_ned, vec_flu_frd
 from isaacrace.course import RaceCourse
@@ -55,6 +56,7 @@ class RaceEnv(gym.Env):
         fpv: FpvConfig | None = None,
         randomize_params: bool = False,
         param_dr_pct: float = 0.1,
+        perception_weight: float = 0.0,
     ):
         """Initialize the racing environment.
 
@@ -72,12 +74,16 @@ class RaceEnv(gym.Env):
                 parameters each episode (in reset); see param_dr_pct.
             param_dr_pct: if randomize_params, the ±% range to sample each parameter
                 around its nominal value (e.g. 0.1 = ±10%).
+            perception_weight: weight on the FOV-gated gate-visibility shaping reward
+                (matches BatchedRaceEnv); 0 = the bare progress reward.
         """
         super().__init__()
         self.course = course
         self.randomize_reset = randomize_reset
         self.randomize_params = randomize_params
         self.param_dr_pct = param_dr_pct
+        self.perception_weight = perception_weight
+        self._fpv = fpv if fpv is not None else FpvConfig()
         self.rng = np.random.default_rng(seed)
         self.p = dyn.PARAMS_5INCH
         self.dt = dyn.DT
@@ -240,26 +246,32 @@ class RaceEnv(gym.Env):
         self.world.step(render=self._render)
         self.step_count += 1
         self.quad.update_state(self.dt)
-        self._update_obs()
+        ned = self._ned_obs_state()
+        self._obs = self.course.build_obs(ned, self.target_gate)
         pos_new = self.quad.state.position
 
-        gp = self.course.gate_pos_enu[self.target_gate % self.course.num_gates]
-        reward = float(np.linalg.norm(pos_old - gp) - np.linalg.norm(pos_new - gp))
-        reward -= 0.001 * float(np.linalg.norm(self.quad.state.angular_velocity))
+        reward = float(self.course.progress(pos_old, pos_new, self.target_gate))
+        reward -= self.course.RATE_PENALTY * float(
+            np.linalg.norm(self.quad.state.angular_velocity)
+        )
+        # perception visibility (measured for parity/logging; rewarded only if on)
+        gate_ned = self.course.gate_pos[self.target_gate % self.course.num_gates]
+        cos_a = perception.gate_bearing(ned[0:3], ned[6:9], gate_ned, self._fpv)
+        vis = float(perception.visibility_reward(cos_a, self._fpv.fov_deg))
+        reward += self.perception_weight * vis  # gate-visibility shaping (0 = off)
 
         passed, collided = self.course.gate_passed(pos_old, pos_new, self.target_gate)
-        if passed:
-            self.target_gate = (self.target_gate + 1) % self.course.num_gates
-        ground = bool(pos_new[2] < 0.0)  # ENU z up: below the ground plane
-        oob = bool(np.any(np.abs(pos_new[0:2]) > 5) or pos_new[2] > 7)
-        if ground or oob or collided:
-            reward = -10.0
-        terminated = bool(ground or oob or collided)
+        self.target_gate = int(self.course.advance_gate(self.target_gate, passed))
+        crashed = bool(self.course.out_of_bounds(pos_new)) or collided
+        if crashed:
+            reward = self.course.CRASH_REWARD
+        terminated = bool(crashed)
         truncated = bool(self.step_count >= self.max_steps)
         info = {
             "gate_passed": passed,
             "target_gate": int(self.target_gate),
-            "collision": bool(collided or ground or oob),
+            "collision": crashed,
+            "perception_visibility": vis,
         }
         return self._obs, np.float32(reward), terminated, truncated, info
 
@@ -287,37 +299,16 @@ class RaceEnv(gym.Env):
             self.quad.params = np.asarray(
                 self.p.randomized(self.rng, self.param_dr_pct)
             )
-        if self.randomize_reset:
-            g = int(self.rng.integers(0, self.course.num_gates))
-            self.target_gate = g
-            # 1 m before the gate, along -through-direction (ENU)
-            pos = self.course.gate_pos_enu[g].astype(
-                float
-            ) - self.course.gate_normal_enu[g].astype(float)
-            vel = self.rng.uniform(-0.5, 0.5, 3)
-            R = Rotation.from_euler(
-                "xyz",
-                [
-                    self.rng.uniform(-np.pi / 9, np.pi / 9),
-                    self.rng.uniform(-np.pi / 9, np.pi / 9),
-                    self.rng.uniform(-np.pi, np.pi),
-                ],
-            )  # ENU-FLU attitude: small tilt, random heading
-            rates_flu = self.rng.uniform(-0.1, 0.1, 3)
-            motor_w = self.rng.uniform(-1.0, 1.0, 4)
-        else:
-            self.target_gate = 0
-            pos = self.course.start_pos_enu.astype(float)
-            vel, rates_flu = np.zeros(3, dtype=float), np.zeros(3)
-            motor_w = np.zeros(4)
-            R = Rotation.from_euler(
-                "z", np.pi / 2
-            )  # level, facing gate 0 (== old NED euler=0 start)
-
-        self.quad.set_pose(pos, R.as_quat())
-        self.quad.set_linear_velocity(vel)
-        self.quad.set_angular_velocity(R.apply(np.asarray(rates_flu, float)))
-        self.quad.motor_w = motor_w
+        # Shared spawn sampler is NED-native; convert the NED-FRD 16-vec to the
+        # ENU-FLU PhysX pose.
+        g, ned = self.course.sample_spawn(self.rng, randomize=self.randomize_reset)
+        self.target_gate = g
+        q_isaac = quat_aero_isaac(Rotation.from_euler("xyz", ned[6:9]).as_quat())
+        R = Rotation.from_quat(q_isaac)
+        self.quad.set_pose(vec_enu_ned(ned[0:3]), q_isaac)
+        self.quad.set_linear_velocity(vec_enu_ned(ned[3:6]))
+        self.quad.set_angular_velocity(R.apply(vec_flu_frd(ned[9:12])))
+        self.quad.motor_w = ned[12:16].copy()
         self.quad._spin_rotors()
         self.world.step(render=self._render)
         self.quad.update_state(self.dt)

@@ -1,13 +1,14 @@
 """The gate racecourse, built from a (hydra) RaceTrackConfig.
 
 This is a configuration driven representation of the racecourse geometry ported from
-optimal_quad_control_rl's validated course.
+optimal_quad_control_rl's validated course. It also manages "racing rules" like reward,
+termination, and spawn state generation.
 """
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from isaacrace.config import RaceTrackConfig
+from isaacrace.config import RaceTrackConfig, RandomSpawnConfig
 from isaacrace.conversions import vec_enu_ned
 
 
@@ -33,10 +34,29 @@ def _wrap_to_pi(angles):
 
 
 class RaceCourse:
-    """A gate racecourse built from a RaceTrackConfig."""
+    """A gate racecourse built from a RaceTrackConfig.
 
-    def __init__(self, cfg: RaceTrackConfig):
-        """Initializes the racecourse geometry from the config."""
+    Also the single source of the race "rules" (reward, termination, spawn) shared by
+    both the Isaac RaceEnv and the vectorized BatchedRaceEnv, so the two stay in lock
+    step. The rule methods are batch-aware (scalar or leading (N,) like build_obs).
+    """
+
+    # Reward / termination constants (one source for both envs).
+    RATE_PENALTY = 0.001  # reward -= this * |body rates|
+    CRASH_REWARD = -10.0  # reward on crash (ground / out-of-bounds / collision)
+
+    def __init__(
+        self, cfg: RaceTrackConfig, spawn_cfg: RandomSpawnConfig | None = None
+    ):
+        """Initializes the racecourse geometry and random spawn configuration.
+
+        Args:
+            cfg: The RaceTrackConfig defining the gate positions, headings, and sizes.
+            spawn_cfg: Optional RandomSpawnConfig defining how to randomize the drone's
+              initial pose. If None, a default configuration is used. Only used if
+              `sample_spawn` is called with `randomize=True`.
+        """
+        self.spawn_cfg = spawn_cfg if spawn_cfg is not None else RandomSpawnConfig()
         self.gate_pos = np.asarray(cfg.gate_pos, dtype=np.float32)  # NED [N,3]
         scale = np.pi / 2.0 if cfg.gate_yaw_unit == "multiples_pi_2" else 1.0
         self.gate_yaw = (
@@ -54,6 +74,8 @@ class RaceCourse:
         ]).astype(np.float32)
         self.gate_yaw_enu = (-self.gate_yaw).astype(np.float32)
         self.start_pos_enu = vec_enu_ned(self.start_pos).astype(np.float32)
+        self._bound_xy = float(cfg.bound_xy)
+        self._bound_z = float(cfg.bound_z)
 
     def _relatives(self):
         """Per-gate position/heading relative to the previous gate (its frame)."""
@@ -149,7 +171,7 @@ class RaceCourse:
     ) -> tuple[NDArray[np.bool_], NDArray[np.bool_]]:
         """Tests gate-plane crossing and in window.
 
-        This method only need to interact with the drone state in isaacsim to determine
+        This method only needs to interact with the drone state in isaacsim to determine
         if a gate was passed, therefore it uses ENU coordinates.
 
         Args:
@@ -184,3 +206,109 @@ class RaceCourse:
             return passed.item(), collided.item()
 
         return passed, collided
+
+    # ------------------------------------------------- race rules (batch-aware)
+    def progress(
+        self, pos_old: ArrayLike, pos_new: ArrayLike, target_gate: ArrayLike
+    ) -> NDArray:
+        """Reward for closing distance to the current gate.
+
+        This method only needs to interact with the drone state in isaacsim to compute
+        the progress reward, therefore it uses ENU coordinates.
+
+        Args:
+            pos_old: The (n_batch x 3) previous position of the drone in ENU coordinates
+            pos_new: The (n_batch x 3) position of the drone in ENU coordinates
+            target_gate: Up to `n_batch` indices of the gate to test against (0-based).
+
+        Returns:
+            A scalar or (n_batch,) reward representing the change in distance to the
+            target gate (positive if the drone got closer, negative if it got farther).
+        """
+        gp = self.gate_pos_enu[np.asarray(target_gate) % self.num_gates]
+        return np.linalg.norm(pos_old - gp, axis=-1) - np.linalg.norm(
+            pos_new - gp, axis=-1
+        )
+
+    def out_of_bounds(self, pos_enu: ArrayLike) -> NDArray[np.bool_]:
+        """True where the drone hit the ground or left the arena (ENU).
+
+        This method only needs to interact with the drone state in isaacsim to determine
+        if the drone is out of bounds, therefore it uses ENU coordinates.
+
+        Args:
+            pos_enu: The (n_batch x 3) position of the drone in ENU coordinates.
+
+        Returns:
+            A bool or (n_batch,) array where True indicates the drone is out of bounds
+            (below ground or outside the horizontal/vertical bounds).
+        """
+        pos_enu = np.asarray(pos_enu)
+        ground = pos_enu[..., 2] < 0.0
+        oob = (np.abs(pos_enu[..., 0:2]) > self._bound_xy).any(axis=-1) | (
+            pos_enu[..., 2] > self._bound_z
+        )
+        return ground | oob
+
+    def advance_gate(self, target_gate: ArrayLike, passed: ArrayLike) -> NDArray:
+        """Advance the target gate index where ``passed`` (wraps).
+
+        Args:
+            target_gate: Up to `n_batch` indices of the current target gate (0-based).
+            passed: A bool or (n_batch,) array where True indicates the gate was passed.
+
+        Returns:
+            An array of the same shape as `target_gate` with the updated target gate
+            indices (incremented by 1 where `passed` is True, with wrap-around to 0
+            after the last gate).
+        """
+        return np.where(
+            passed, (np.asarray(target_gate) + 1) % self.num_gates, target_gate
+        )
+
+    def sample_spawn(
+        self, rng: np.random.Generator, n: int | None = None, randomize: bool = True
+    ) -> tuple[int | NDArray, NDArray]:
+        """Sample spawn state(s) in front of a target gate.
+
+        This is the source of the reset distribution; RaceEnv converts the NED state to
+        an ENU-FLU PhysX pose, BatchedRaceEnv uses it directly.
+
+        Args:
+            rng: The random number generator to use for sampling.
+            n: The number of spawn states to sample. If None, a single state is
+              returned.
+            randomize: Whether to randomize the spawn state. If true, we draw a jittered
+              pose from ``self.spawn_cfg`` near a random gate, otherwise we use a
+              deterministic demo start (gate 0, level, zero vel/rates/motor). Defaults
+              to True so the implicit behavior is randomized spawns, not a silently
+              frozen start.
+
+        Returns:
+            A tuple of (gate_index, state) where gate_index is the index (either an
+            integer or an array) of the gate to spawn in front of, and state is the
+            corresponding (16,) or (n, 16) array of NED pose/vel/rates/motor.
+        """
+        scalar = n is None
+        m = 1 if scalar else n
+        state = np.zeros((m, 16))
+        if randomize:
+            sc = self.spawn_cfg
+            g = rng.integers(0, self.num_gates, m)
+            pos_enu = self.gate_pos_enu[g].astype(float) - sc.dist_back * (
+                self.gate_normal_enu[g].astype(float)
+            )
+            state[:, 0:3] = vec_enu_ned(pos_enu)
+            state[:, 3:6] = vec_enu_ned(
+                rng.uniform(-sc.vel_bounds, sc.vel_bounds, (m, 3))
+            )
+            state[:, 6] = rng.uniform(-sc.tilt_bounds, sc.tilt_bounds, m)
+            state[:, 7] = rng.uniform(-sc.tilt_bounds, sc.tilt_bounds, m)
+            state[:, 8] = rng.uniform(-np.pi, np.pi, m)
+            state[:, 9:12] = rng.uniform(-sc.rate_bounds, sc.rate_bounds, (m, 3))
+            state[:, 12:16] = rng.uniform(-1.0, 1.0, (m, 4))
+        else:
+            g = np.zeros(m, dtype=int)
+            # level, facing gate 0 (NED euler = 0); vel/rates/motor stay zero
+            state[:, 0:3] = vec_enu_ned(self.start_pos_enu.astype(float))
+        return (int(g[0]), state[0]) if scalar else (g, state)

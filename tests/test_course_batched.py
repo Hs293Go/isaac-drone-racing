@@ -42,6 +42,24 @@ def test_build_obs_batched_matches_scalar(seed):
     np.testing.assert_allclose(batched, scalar, rtol=1e-5, atol=1e-6)
 
 
+def test_sample_spawn_randomize_semantics():
+    c = _course()
+    rng = np.random.default_rng(0)
+    # randomize=True (the default) -> distinct, jittered rows near random gates
+    g, state = c.sample_spawn(rng, 16)
+    assert g.max() > 0
+    assert not np.all(state == state[0])
+    assert np.abs(state[:, 3:12]).sum() > 0.0
+    # randomize=False -> the deterministic start (gate 0, level, zero vel/rates/motor)
+    g0, state0 = c.sample_spawn(rng, 16, randomize=False)
+    assert np.all(g0 == 0)
+    assert not state0[:, 3:16].any()  # vel/rates/motor exactly zero (np.zeros)
+    # scalar form (n=None) returns a python int + a (16,) vector
+    gi, vec = c.sample_spawn(rng, randomize=False)
+    assert isinstance(gi, int)
+    assert vec.shape == (16,)
+
+
 @pytest.mark.parametrize("seed", range(4))
 def test_gate_passed_batched_matches_scalar(seed):
     c = _course()
