@@ -60,11 +60,14 @@ class TrainConfig:
     domain_randomization: bool = False
     param_dr_pct: float = 0.10
     # perception shaping: reward keeping the target gate in the camera FOV (0 = off).
-    perception_weight: float = 0.02
+    perception_weight: float = 0.0
     # sim backend: "batched" (vectorized pure-NumPy BatchedRaceEnv, ~100x faster, no
     # Isaac) or "isaac" (single PhysX World, on-rig fidelity). num_envs -> batched.
     backend: str = "batched"
     num_envs: int = 512
+    # output basename under train_out/ (a profile can set its own, e.g. via an
+    # experiment config, so it doesn't overwrite the baseline model)
+    run_name: str = "race_ppo"
 
 
 @dataclass

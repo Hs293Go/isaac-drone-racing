@@ -47,7 +47,7 @@ class BatchedRaceEnv(VecEnv):
         fpv: FpvConfig | None = None,
         randomize_params: bool = False,
         param_dr_pct: float = 0.1,
-        perception_weight: float = 0.02,
+        perception_weight: float = 0.0,
     ):
         """Initialize the batched racing environment.
 

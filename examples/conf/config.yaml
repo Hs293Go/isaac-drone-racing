@@ -4,6 +4,7 @@ defaults:
   - track: figure8
   - session: default
   - _self_
+  - optional experiment: null   # named profiles, e.g. experiment=perception_aware
 
 # Keep the working directory stable (Isaac writes caches/logs relative to it) and don't scatter
 # dated outputs/ dirs — this is a demo, not a hyperparameter sweep.

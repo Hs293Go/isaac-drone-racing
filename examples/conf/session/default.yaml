@@ -28,9 +28,10 @@ train:
   save_freq: 200000
   domain_randomization: false   # resample drone params +-pct each episode (OQCRL-style)
   param_dr_pct: 0.10
-  perception_weight: 0.02
+  perception_weight: 0.0         # gate-visibility shaping (0 = off; the PA profile sets it)
   backend: batched               # "batched" (fast, pure-NumPy VecEnv) or "isaac" (PhysX)
   num_envs: 512                  # parallel drones in the batched backend
+  run_name: race_ppo             # output basename under train_out/ (profiles override it)
 
 # Front-mounted FPV camera, shown as a docked viewport in the GUI (windowed).
 # Try it with:

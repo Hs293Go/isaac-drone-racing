@@ -139,6 +139,7 @@ def main(cfg: DictConfig):
         },
         verbose=1,
         device="cpu",
+        seed=session.seed,  # controls PPO init + sampling -> reproducible seed sweeps
         tensorboard_log=out,
     )
     cbs = [
@@ -146,13 +147,13 @@ def main(cfg: DictConfig):
         CheckpointCallback(
             save_freq=max(1, tcfg.save_freq // venv.num_envs),
             save_path=out,
-            name_prefix="race_ppo",
+            name_prefix=tcfg.run_name,
         ),
     ]
     model.learn(total_timesteps=tcfg.total_timesteps, callback=cbs, progress_bar=True)
-    model.save(str(Path(out) / "race_ppo_final"))
+    model.save(str(Path(out) / f"{tcfg.run_name}_final"))
     print(
-        f"[train] done ({tcfg.backend}); saved {out}/race_ppo_final "
+        f"[train] done ({tcfg.backend}); saved {out}/{tcfg.run_name}_final "
         f"({tcfg.total_timesteps} steps)"
     )
 
