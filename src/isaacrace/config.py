@@ -34,6 +34,9 @@ class DemoConfig:
 
     model: str | None = None  # None -> the packaged models/race_ppo.zip
     steps: int = 1200
+    capture: bool = False  # record the drone's FPV feed to an mp4 (needs fpv.enabled)
+    capture_path: str = "fpv.mp4"
+    capture_fps: int = 50
 
 
 @dataclass

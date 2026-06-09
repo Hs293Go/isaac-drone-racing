@@ -53,10 +53,11 @@ def main(cfg: DictConfig):
     app = SimulationApp({"headless": session.headless})
 
     import carb
-    from isaacrace.course import RaceCourse
-    from isaacrace.env import RaceEnv
     import numpy as np
     from stable_baselines3 import PPO
+
+    from isaacrace.course import RaceCourse
+    from isaacrace.env import RaceEnv
 
     course = RaceCourse(track_cfg)
     env = RaceEnv(
@@ -86,6 +87,61 @@ def main(cfg: DictConfig):
     carb.log_warn(f"[demo] model={model_path}")
 
     obs, _ = env.reset()
+
+    # Optional capture (windowed only): record the course view + FPV side-by-side to an
+    # mp4. Replicator render products need the full RTX pipeline, which only comes up in
+    # windowed mode; headless hard-crashes this pip-Isaac build, so we gate it out.
+    cap = (
+        session.demo.capture
+        and not session.headless
+        and session.fpv.enabled
+        and env.quad.camera is not None
+    )
+    if session.demo.capture and not cap:
+        why = (
+            "session is headless (capture needs windowed RTX; session.headless=false)"
+            if session.headless
+            else "FPV camera disabled (set session.fpv.enabled=true)"
+        )
+        carb.log_warn(f"[demo] capture requested but skipped: {why}")
+    writer = None
+    if cap:
+        import cv2
+        from isaacsim.core.utils.extensions import enable_extension
+
+        from isaacrace.camera import CourseCamera
+
+        carb.log_warn("[demo] recording course view + FPV side-by-side -> mp4")
+
+        # Replicator is a Kit extension that registers OmniGraph nodes lazily; enable it
+        # and tick a couple updates so those nodes exist BEFORE we create a render
+        # product (creating one against an unregistered graph hard-crashes the app).
+        enable_extension("omni.replicator.core")
+        for _ in range(2):
+            app.update()
+
+        # Static "main" camera framing the whole course, from an elevated 3/4 corner.
+        centroid = course.gate_pos_enu.mean(axis=0)
+        course_cam = CourseCamera(
+            env.world.stage,
+            "/World/course_cam",
+            eye=centroid + np.array([2.5, -4.5, 2.5]),
+            look_at=centroid,
+            fov_deg=60.0,
+        )
+        course_cam.start_capture(session.fpv.resolution)
+        env.quad.camera.start_capture(session.fpv.resolution)
+        for _ in range(2):
+            env.world.render()  # warm up: the render products' first frames are empty
+
+        w, h = (int(v) for v in session.fpv.resolution)
+        writer = cv2.VideoWriter(
+            session.demo.capture_path,
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            int(session.demo.capture_fps),
+            (2 * w, h),  # side-by-side: course view | FPV
+        )
+
     gates = 0
     for t in range(session.demo.steps):
         if not app.is_running():
@@ -93,6 +149,12 @@ def main(cfg: DictConfig):
         action, _ = model.predict(obs, deterministic=True)
         obs, _reward, terminated, truncated, info = env.step(action)
         gates += int(info["gate_passed"])
+        if cap:
+            # windowed env.step already rendered with the new pose -> grab both cameras
+            main = course_cam.grab()[..., ::-1]  # RGB -> BGR for cv2
+            fpv = env.quad.camera.grab()[..., ::-1]
+            if main.shape == fpv.shape == (h, w, 3):
+                writer.write(np.ascontiguousarray(np.hstack([main, fpv])))
         if t % 100 == 0:
             s = env._world_state
             carb.log_warn(
@@ -102,6 +164,10 @@ def main(cfg: DictConfig):
         if terminated or truncated:
             carb.log_warn(f"[demo] episode end t={t}: {info}")
             break
+
+    if writer is not None:
+        writer.release()
+        carb.log_warn(f"[demo] capture (course | FPV) -> {session.demo.capture_path}")
 
     laps = gates / course.num_gates
     carb.log_warn(f"[demo] RESULT gates_passed={gates} laps={laps:.2f}")

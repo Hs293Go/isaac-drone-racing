@@ -4,6 +4,9 @@
 # training artifacts (tensorboard logs + checkpoints land here)
 train_out/
 
+# demo capture videos (regenerate via demo.py session.demo.capture=true)
+*.mp4
+
 # editor / OS
 .vscode/
 .idea/

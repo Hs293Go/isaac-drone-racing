@@ -8,6 +8,9 @@ max_steps: 1200
 demo:
   model: null      # null -> the packaged models/race_ppo.zip
   steps: 1200
+  capture: false        # record the drone's FPV feed to an mp4 (needs fpv.enabled)
+  capture_path: fpv.mp4
+  capture_fps: 50
 
 train:
   total_timesteps: 3000000
