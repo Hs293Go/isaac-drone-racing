@@ -8,7 +8,8 @@
         session.demo.model=/path/to/model.zip track=figure8
 
 Config lives in conf/ (track + session groups, see conf/config.yaml); override on
-the CLI as above. Model defaults to the packaged models/race_ppo.zip.
+the CLI as above. Model defaults to the packaged perception-aware policy
+(models/race_ppo_perception.zip — nose-first, gate-visibility-shaped).
 """
 
 import os
@@ -65,7 +66,7 @@ def main(cfg: DictConfig):
         carb.log_warn(f"[demo] FPV viewport on {env._fpv_cam_path}")
 
     model_path = session.demo.model or str(
-        Path(__file__).parent / "models" / "race_ppo.zip"
+        Path(__file__).parent / "models" / "race_ppo_perception.zip"
     )
     model = PPO.load(model_path, device="cpu")
     carb.log_warn(f"[demo] model={model_path}")

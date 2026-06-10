@@ -47,7 +47,7 @@ class RandomSpawnConfig:
 class DemoConfig:
     """Demo-entrypoint settings (which model to roll out, for how many steps)."""
 
-    model: str | None = None  # None -> the packaged models/race_ppo.zip
+    model: str | None = None  # None -> packaged race_ppo_perception.zip (PA default)
     steps: int = 1200
     capture: bool = False  # record the drone's FPV feed to an mp4 (needs fpv.enabled)
     capture_path: str = "fpv.mp4"
@@ -85,7 +85,7 @@ class TrainConfig:
     num_envs: int = 512
     # output basename under train_out/ (a profile can set its own, e.g. via an
     # experiment config, so it doesn't overwrite the baseline model)
-    run_name: str = "race_ppo"
+    run_name: str = "race_ppo_perception"
 
 
 @dataclass

@@ -6,7 +6,7 @@ headless: true
 max_steps: 1200
 
 demo:
-  model: null      # null -> the packaged models/race_ppo.zip
+  model: null      # null -> packaged race_ppo_perception.zip; train a baseline via examples/train.py
   steps: 1200
   capture: false        # record the drone's FPV feed to an mp4 (needs fpv.enabled)
   capture_path: fpv.mp4
