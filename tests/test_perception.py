@@ -1,4 +1,4 @@
-"""Perception-aware FPV geometry tests (pure NumPy; no isaacsim)."""
+"""Perception / flight reward-signal tests (pure NumPy; no isaacsim)."""
 
 import numpy as np
 from pytest import approx
@@ -38,3 +38,19 @@ def test_visibility_zero_at_fov_edge():
         0.0
     )  # outside
     assert perception.visibility_reward(1.0, fpv.fov_deg) > 0.0  # centered
+
+
+def test_backpedal_forward_zero_backward_one():
+    e = np.zeros(3)  # level: body nose = NED [1, 0, 0]
+    assert float(perception.backpedal([1.0, 0.0, 0.0], e)) == approx(
+        0.0
+    )  # nose-forward
+    assert float(perception.backpedal([-1.0, 0.0, 0.0], e)) == approx(1.0)  # tail-first
+    assert float(perception.backpedal([0.0, 1.0, 0.0], e)) == approx(
+        0.0
+    )  # strafe is free
+    # batched: forward / backward / strafe
+    vel = np.array([[1.0, 0, 0], [-1.0, 0, 0], [0, 1.0, 0]])
+    np.testing.assert_allclose(
+        perception.backpedal(vel, np.zeros((3, 3))), [0.0, 1.0, 0.0]
+    )

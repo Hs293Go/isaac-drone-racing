@@ -12,8 +12,14 @@
 # 0.25} -> seed=1 is the promoted winner: 31 gates (beats the no-perception
 # baseline's 28) AND perception-aware (vis 0.37). These defaults reproduce that
 # winner; override session.seed to explore other draws.
+#
+# backpedal_weight is core to PA: a matched-seed A/B (seeds 0-2) showed it
+# raises gate visibility on 3/3 seeds (mean +0.21), eliminates tail-first
+# flight, and tightens the gate spread (18-32 -> 23-25) at ~neutral mean gates.
+# 0.01 is the usable value (0.02+ crashes the figure-8 centre crossings).
 session:
   seed: 1
   train:
     perception_weight: 0.03
+    backpedal_weight: 0.01
     run_name: race_ppo_perception

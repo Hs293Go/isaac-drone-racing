@@ -1,7 +1,8 @@
-"""Perception-aware reward geometry for the FPV camera (an optional toggle).
+"""Pose-derived reward-shaping signals (FPV gate visibility + flight quality).
 
-The FPV camera feeds its geometry to the controller via a reward that keeps the target
-gate inside the camera's field of view.
+The course-independent reward terms: ``gate_bearing`` / ``visibility_reward`` keep the
+target gate in the FPV camera's FOV, and ``backpedal`` penalizes tail-first flight
+(together, the perception-aware shaping).
 
 These functions are pure NumPy/scipy (no Isaac Sim) and work in NED-FRD, matching the
 env's native state, for easy integration into the RL reward.
@@ -68,3 +69,28 @@ def gate_bearing(
     dist = np.linalg.norm(los, axis=-1, keepdims=True)
     los_body = rot.inv().apply(los) / np.maximum(dist, _EPS_SENTINEL)
     return los_body @ _optical_axis_frd(fpv.tilt_deg)  # (N,)
+
+
+def backpedal(vel_ned: ArrayLike, euler_ned: ArrayLike) -> NDArray:
+    """Tail-first penalty: relu(-cos) between velocity and the body nose (NED).
+
+    0 when the nose leads the velocity (flying forward), up to 1 when fully
+    tail-first. Frame-invariant, so it reads the env's native NED state directly.
+    Batch-aware (scalar or leading (N,)).
+
+    Args:
+        vel_ned: The (n_batch x 3) NED velocity of the drone.
+        euler_ned: The (n_batch x 3) aerospace (ZYX) euler angles of the drone.
+
+    Returns:
+        A scalar or (n_batch,) penalty in [0, 1].
+    """
+    vel = np.asarray(vel_ned, float)
+    euler = np.asarray(euler_ned, float)
+    theta, psi = euler[..., 1], euler[..., 2]
+    # body x-axis in NED = first column of Rz(psi) Ry(theta) Rx(phi)
+    ct = np.cos(theta)
+    fwd = np.stack([ct * np.cos(psi), ct * np.sin(psi), -np.sin(theta)], axis=-1)
+    speed = np.linalg.norm(vel, axis=-1)
+    cos = np.sum(vel * fwd, axis=-1) / np.maximum(speed, _EPS_SENTINEL)
+    return np.maximum(0.0, -cos)

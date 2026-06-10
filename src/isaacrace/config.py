@@ -76,6 +76,9 @@ class TrainConfig:
     param_dr_pct: float = 0.10
     # perception shaping: reward keeping the target gate in the camera FOV (0 = off).
     perception_weight: float = 0.0
+    # backpedal penalty: reward -= weight * relu(-cos(vel, nose)); 0 = suppressed.
+    # Penalizes counterintuitive backpedaling solutions and raises gate visibility.
+    backpedal_weight: float = 0.0
     # sim backend: "batched" (vectorized pure-NumPy BatchedRaceEnv, ~100x faster, no
     # Isaac) or "isaac" (single PhysX World, on-rig fidelity). num_envs -> batched.
     backend: str = "batched"

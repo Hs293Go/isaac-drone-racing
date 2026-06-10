@@ -48,6 +48,7 @@ class BatchedRaceEnv(VecEnv):
         randomize_params: bool = False,
         param_dr_pct: float = 0.1,
         perception_weight: float = 0.0,
+        backpedal_weight: float = 0.0,
     ):
         """Initialize the batched racing environment.
 
@@ -63,7 +64,8 @@ class BatchedRaceEnv(VecEnv):
                 around its nominal value (e.g. 0.1 = ±10%).
             perception_weight: weight on the FOV-gated gate-visibility shaping reward
                 (matches RaceEnv); 0 = the bare progress reward.
-
+            backpedal_weight: weight on the tail-first penalty (reward nose-first);
+                0 suppresses it.
         """
         obs_space = spaces.Box(-np.inf, np.inf, shape=(20,), dtype=np.float32)
         act_space = spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32)
@@ -75,6 +77,7 @@ class BatchedRaceEnv(VecEnv):
         self.randomize_params = randomize_params
         self.param_dr_pct = param_dr_pct
         self.perception_weight = perception_weight
+        self.backpedal_weight = backpedal_weight
         self._fpv = fpv if fpv is not None else FpvConfig()
         self.rng = np.random.default_rng(seed)
 
@@ -156,6 +159,10 @@ class BatchedRaceEnv(VecEnv):
         )
         vis = perception.visibility_reward(cos_a, self._fpv.fov_deg)
         reward += self.perception_weight * vis  # gate-visibility shaping (0 = off)
+        # tail-first penalty, enshrined as part of PA (weight 0 suppresses it)
+        reward -= self.backpedal_weight * perception.backpedal(
+            self.state[:, 3:6], self.state[:, 6:9]
+        )
 
         passed, collided = self.course.gate_passed(pos_old, pos_new, self.target_gate)
         self.target_gate = self.course.advance_gate(self.target_gate, passed)

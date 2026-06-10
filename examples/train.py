@@ -94,6 +94,7 @@ def main(cfg: DictConfig):
                 randomize_params=tcfg.domain_randomization,
                 param_dr_pct=tcfg.param_dr_pct,
                 perception_weight=tcfg.perception_weight,
+                backpedal_weight=tcfg.backpedal_weight,
             )
         )
         # Per-env rollout length sized so the buffer (num_envs * n_steps) stays a few

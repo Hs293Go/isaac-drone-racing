@@ -29,6 +29,7 @@ train:
   domain_randomization: false   # resample drone params +-pct each episode (OQCRL-style)
   param_dr_pct: 0.10
   perception_weight: 0.0         # gate-visibility shaping (0 = off; the PA profile sets it)
+  backpedal_weight: 0.0          # penalize tail-first flight (0 = suppressed; PA sets it)
   backend: batched               # "batched" (fast, pure-NumPy VecEnv) or "isaac" (PhysX)
   num_envs: 512                  # parallel drones in the batched backend
   run_name: race_ppo             # output basename under train_out/ (profiles override it)
