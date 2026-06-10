@@ -1,0 +1,6 @@
+# Checked-in but shouldn't be searched
+uv.lock
+
+# optional typings
+*.pyi
+ty.toml
