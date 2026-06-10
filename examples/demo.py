@@ -8,17 +8,19 @@
         session.demo.model=/path/to/model.zip track=figure8
 
 Config lives in conf/ (track + session groups, see conf/config.yaml); override on
-the CLI as above. Model defaults to the packaged models/race_ppo.zip; the
-numpy._core shim lets you point session.demo.model at an OQCRL model (pickled
-under numpy 2.x) in this numpy-1.26 venv.
+the CLI as above. Model defaults to the packaged models/race_ppo.zip.
 """
 
-import contextlib
 import os
 from pathlib import Path
 
 import hydra
+import numpy as np
 from omegaconf import DictConfig, OmegaConf
+from stable_baselines3 import PPO
+
+from isaacrace.config import RaceTrackConfig, SessionConfig
+from isaacrace.course import RaceCourse
 
 os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
 
@@ -26,21 +28,6 @@ os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     """Entry point: roll out a trained policy and report gates cleared."""
-    import sys
-
-    # numpy 2.x (foreign model pickle) -> numpy 1.26 (Isaac venv) shim, before
-    # SB3/torch.
-    import numpy as np
-
-    sys.modules["numpy._core"] = np.core
-    for _sub in ["multiarray", "umath", "numeric", "_multiarray_umath", "overrides"]:
-        with contextlib.suppress(Exception):
-            sys.modules["numpy._core." + _sub] = __import__(
-                "numpy.core." + _sub, fromlist=[_sub]
-            )
-
-    from isaacrace.config import RaceTrackConfig, SessionConfig
-
     track_cfg = RaceTrackConfig.from_dict(
         OmegaConf.to_container(cfg.track, resolve=True)
     )
@@ -53,10 +40,7 @@ def main(cfg: DictConfig):
     app = SimulationApp({"headless": session.headless})
 
     import carb
-    import numpy as np
-    from stable_baselines3 import PPO
 
-    from isaacrace.course import RaceCourse
     from isaacrace.env import RaceEnv
 
     course = RaceCourse(track_cfg)
