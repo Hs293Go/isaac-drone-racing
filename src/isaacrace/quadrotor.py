@@ -24,7 +24,7 @@ from isaacrace.conversions import vec_flu_frd
 import isaacrace.dynamics as dyn
 from isaacrace.state import State
 
-IRIS_USD = str(Path(__file__).parent / "assets" / "iris.usd")
+RACER_USD = str(Path(__file__).parent / "assets" / "racer.usd")
 
 
 def _to_list_float(arr: ArrayLike) -> list[float]:
@@ -41,7 +41,7 @@ def _to_sized_list_float(arr: ArrayLike, size: int) -> list[float]:
 
 
 class RacingDrone(Robot):
-    """One drone: Iris USD + FPV camera + physics, driven step-by-step by env."""
+    """One drone: SourceOne racer + FPV camera + physics, driven step-by-step by env."""
 
     def __init__(
         self,
@@ -50,7 +50,7 @@ class RacingDrone(Robot):
         params: ArrayLike,
         fpv: FpvConfig | None = None,
         stage_prefix: str = "/World/drone",
-        usd_file: str = IRIS_USD,
+        usd_file: str = RACER_USD,
     ):
         """Construct the racing drone.
 
@@ -63,7 +63,7 @@ class RacingDrone(Robot):
             fpv: Optional FPV camera config; when enabled, a drone.camera is created
               here, before reset().
             stage_prefix: USD path for the drone.
-            usd_file: The vendored Iris USD.
+            usd_file: The vendored drone USD (default: our SourceOne racer.usd).
         """
         # Reference the drone USD onto a fresh prim, then wrap it as a Robot
         # (orientation is w-first for NVIDIA's convention; the level spawn here is
@@ -246,9 +246,7 @@ class RacingDrone(Robot):
         self._rotor_spin = np.array([1.0, 1.0, -1.0, -1.0])  # rotor0,1 CCW; rotor2,3 CW
         self._rotor_ops = []
         for i in range(4):
-            prim = get_prim_at_path(f"{self.stage_prefix}/rotor{i}/iris_prop_ccw")
-            if not (prim and prim.IsValid()):
-                prim = get_prim_at_path(f"{self.stage_prefix}/rotor{i}/iris_prop_cw")
+            prim = get_prim_at_path(f"{self.stage_prefix}/rotor{i}/prop")
             if not (prim and prim.IsValid()):
                 self._rotor_ops = []
                 return

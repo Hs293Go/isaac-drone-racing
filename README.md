@@ -21,7 +21,7 @@ Isaac Race combines lessons learned from two established codebases:
 
 - [Pegasus Simulator](https://github.com/PegasusSimulator/PegasusSimulator/tree/main)
   - This drone simulation framework showed us some proven practices of
-    integrating with PhysX, and provided the USD drone model.
+    integrating with PhysX.
 
 - [`optimal_quad_control_RL`](https://github.com/tudelft/optimal_quad_control_RL)
   - The implementation of **One Net to Rule Them All: Domain Randomization in
@@ -46,8 +46,8 @@ The packaged and baseline policies each fly a 1200-step episode on Isaac PhysX:
 
 | Policy                                | Result on Isaac PhysX                         | Reproduce                                                                                       |
 | ------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Packaged perception-aware             | **24 gates (3.0 laps)**, nose-first, no crash | `uv run examples/demo.py session.headless=true`                                                 |
-| Freshly trained baseline (no shaping) | **23 gates (2.88 laps)**, no crash            | `uv run examples/demo.py session.headless=true session.demo.model=train_out/race_ppo_final.zip` |
+| Packaged perception-aware             | **25 gates (3.12 laps)**, nose-first, no crash | `uv run examples/demo.py session.headless=true`                                                 |
+| Freshly trained baseline (no shaping) | **30 gates (3.75 laps)**, no crash            | `uv run examples/demo.py session.headless=true session.demo.model=train_out/race_ppo_final.zip` |
 
 ## Running the code
 
