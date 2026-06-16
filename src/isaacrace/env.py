@@ -28,7 +28,7 @@ from pxr import Gf, UsdGeom, UsdLux
 from scipy.spatial.transform import Rotation
 
 from isaacrace import perception
-from isaacrace.config import FpvConfig
+from isaacrace.config import DynamicsMode, FpvConfig
 from isaacrace.conversions import quat_aero_isaac, vec_enu_ned, vec_flu_frd
 from isaacrace.course import RaceCourse
 import isaacrace.dynamics as dyn
@@ -58,6 +58,7 @@ class RaceEnv(gym.Env):
         param_dr_pct: float = 0.1,
         perception_weight: float = 0.0,
         backpedal_weight: float = 0.0,
+        dynamics_mode: DynamicsMode = "kinematic",
     ):
         """Initialize the racing environment.
 
@@ -79,6 +80,11 @@ class RaceEnv(gym.Env):
                 (matches BatchedRaceEnv); 0 = the bare progress reward.
             backpedal_weight: weight on the tail-first penalty (reward nose-first);
                 0 suppresses it.
+            dynamics_mode: Isaac plant model, either:
+                - "kinematic": overrides rotational dynamics to be based on TU Delft's
+                  motor effectiveness/INDI model
+                - "classical": per-rotor forces through a real inertia tensor;
+                see RacingDrone
         """
         super().__init__()
         self.course = course
@@ -114,7 +120,13 @@ class RaceEnv(gym.Env):
         self._spawn_lighting()
         self._spawn_ground()
         self._spawn_gates()
-        self.quad = RacingDrone(self.world, self.course.start_pos_enu, self.p, fpv=fpv)
+        self.quad = RacingDrone(
+            self.world,
+            self.course.start_pos_enu,
+            self.p,
+            fpv=fpv,
+            dynamics_mode=dynamics_mode,
+        )
         self.world.reset()
         # dynamic_control reads/writes need the timeline playing; start it once
         # here so the env is self-contained (demo/train just construct it and use

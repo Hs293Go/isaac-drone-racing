@@ -8,23 +8,47 @@ support for multi-vehicle registration.
 """
 
 from pathlib import Path
+from typing import get_args
 
 import carb
 from isaacsim.core.api.robots.robot import Robot
 from isaacsim.core.api.world import World
 from isaacsim.core.utils.prims import define_prim, get_prim_at_path
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 from omni.isaac.dynamic_control import _dynamic_control  # noqa: PLC2701
 from pxr import UsdGeom
 from scipy.spatial.transform import Rotation
 
 from isaacrace.camera import FpvCamera, FpvConfig
+from isaacrace.config import DynamicsMode
 from isaacrace.conversions import vec_flu_frd
 import isaacrace.dynamics as dyn
 from isaacrace.state import State
 
 RACER_USD = str(Path(__file__).parent / "assets" / "racer.usd")
+
+# --- classical-plant 5" airframe (used only by dynamics_mode="classical") ---
+# Our own 5" racer. Refer to github.com/Hs293Go/source_one_SolidWorks.git for the CAD
+# and derivation of these numbers.
+_ARM_X = 0.1008  # m, forward motor offset (extracted)
+_ARM_Y = 0.0766  # m, lateral motor offset (extracted)
+# Betaflight-layout rotor positions in the FLU body frame (x fwd, y left, z up),
+# matching the modeling heritage of optimal_quad_control_rl.
+_ROTOR_POS_FLU = np.array([
+    [-_ARM_X, -_ARM_Y, 0.0],  # rotor 0: back-right
+    [+_ARM_X, -_ARM_Y, 0.0],  # rotor 1: front-right
+    [-_ARM_X, +_ARM_Y, 0.0],  # rotor 2: back-left
+    [+_ARM_X, +_ARM_Y, 0.0],  # rotor 3: front-left
+])
+# Per-rotor yaw-reaction sign in FRD-z from the betaflight spin convention; converted to
+# FLU at apply time.
+_YAW_SIGN_FRD = np.array([-1.0, +1.0, +1.0, -1.0])
+_KAPPA = 0.0157  # cq/ct: generic 5" reaction-to-thrust ratio (prop unmeasured)
+# Rotor+prop polar inertia about the spin axis (kg*m^2): the rotor angular-momentum
+# reaction torque a pure rigid-body plant omits. The value is identified k_r5 (1.97e-3)
+# x CAD body yaw inertia Jz (3.14e-3)
+_I_ROTOR = 6.19e-6
 
 
 def _to_list_float(arr: ArrayLike) -> list[float]:
@@ -51,6 +75,7 @@ class RacingDrone(Robot):
         fpv: FpvConfig | None = None,
         stage_prefix: str = "/World/drone",
         usd_file: str = RACER_USD,
+        dynamics_mode: DynamicsMode = "kinematic",
     ):
         """Construct the racing drone.
 
@@ -64,6 +89,10 @@ class RacingDrone(Robot):
               here, before reset().
             stage_prefix: USD path for the drone.
             usd_file: The vendored drone USD (default: our SourceOne racer.usd).
+            dynamics_mode: Isaac plant model, either:
+              - "kinematic": overrides rotational dynamics to be based on TU Delft's
+                motor effectiveness/INDI model
+              - "classical": per-rotor forces through a real inertia tensor;
         """
         # Reference the drone USD onto a fresh prim, then wrap it as a Robot
         # (orientation is w-first for NVIDIA's convention; the level spawn here is
@@ -81,6 +110,11 @@ class RacingDrone(Robot):
         self.stage = world.stage
         self.stage_prefix = stage_prefix
         self.params = np.asarray(params)
+        if dynamics_mode not in (valid_dynamics_modes := get_args(DynamicsMode)):
+            raise ValueError(
+                f"Invalid dynamics_mode: {dynamics_mode} ∉ {valid_dynamics_modes}"
+            )
+        self.dynamics_mode = dynamics_mode
         self.state = State()
         self.motor_w = np.zeros(4)
         self.mass = None
@@ -160,6 +194,22 @@ class RacingDrone(Robot):
         )
         dc.apply_body_force(rb, carb.Float3(force), carb.Float3(pos), False)
 
+    def apply_torque(self, torque: ArrayLike, body_part="/body"):
+        """Apply a body-frame (FLU) torque to a rigid body part via dynamic_control.
+
+        Args:
+            torque: A 3D body-frame (FLU) torque vector (N*m).
+            body_part: Path to the body part, relative to the drone's stage prefix.
+        """
+        torque = _to_sized_list_float(torque, 3)
+        dc = self.get_dc_interface()
+        rb = (
+            self._body()
+            if body_part == "/body"
+            else dc.get_rigid_body(self.stage_prefix + body_part)
+        )
+        dc.apply_body_torque(rb, carb.Float3(torque), False)
+
     def set_pose(self, pos: ArrayLike, quat_xyzw: ArrayLike):
         """Set the body pose of the drone via dynamic_control.
 
@@ -193,11 +243,12 @@ class RacingDrone(Robot):
     # ----------------------------------------------- faithful physics (per RL step)
     #
     def apply_disc_control(self, control_actions: ArrayLike, dt: float):
-        """Advance the rotor state; apply the model's force and rotation for one step.
+        """Advance the rotor state and actuate the body for one RL step.
 
-        PhysX translation force + kinematic-rotation angular velocity. The analog
-        of Pegasus's update(), but the rotor command comes from the RL `actions`
-        the env injects rather than from a backend's input_reference().
+        Dispatches on ``dynamics_mode``: "kinematic" is the faithful TU Delft Model
+        splitting PhysX translation motion and kinematic-only rotation; "classical"
+        places per-rotor thrust forces at the arms and lets PhysX integrate rotation.
+        Either way the rotor command is the RL ``actions`` the env injects.
 
         Args:
             control_actions: The 4D vector of rotor commands (normalized [-1,1]) from
@@ -209,8 +260,14 @@ class RacingDrone(Robot):
         control_actions = np.asarray(control_actions)
         d_w, _ = dyn.motor_derivative(self.motor_w, control_actions, self.params)
         self.motor_w = np.clip(self.motor_w + dt * d_w, -1.0, 1.0)
+        if self.dynamics_mode == "classical":
+            self._apply_classical(control_actions)
+        else:
+            self._apply_kinematic(control_actions, dt)
+        self._spin_rotors()
 
-        # Copy the operating point state for the physics
+    def _apply_kinematic(self, control_actions: NDArray, dt: float):
+        """Faithful TU Delft model: PhysX translation force + kinematic rotation."""
         s_op = self.state
         body2world = Rotation.from_quat(s_op.attitude)
 
@@ -225,7 +282,45 @@ class RacingDrone(Robot):
         rates_flu = s_op.angular_velocity + dt * vec_flu_frd(alpha_frd)
         self.apply_force(force_flu)
         self.set_angular_velocity(body2world.apply(rates_flu))
-        self._spin_rotors()
+
+    def _apply_classical(self, control_actions: NDArray):
+        """Classical rigid-body plant.
+
+        Applies thrust force at each arm tip, so PhysX forms each rotor's roll/pitch
+        torque through its own lever arm calculation. The yaw reaction torque is applied
+        as a pure couple.
+
+        While translational thrust is handled as above, translational drag is applied
+        separately.
+        """
+        s_op = self.state
+        body2world = Rotation.from_quat(s_op.attitude)
+
+        # Per-rotor thrust (N) along body-up at each arm; PhysX forms r x F -> torque.
+        thrust = self.mass * dyn.rotor_thrusts(self.motor_w, self.params)  # (4,)
+        for i in range(4):
+            self.apply_force([0.0, 0.0, float(thrust[i])], pos=_ROTOR_POS_FLU[i])
+
+        # Yaw reaction couple: steady prop drag (kappa*thrust) plus the rotor
+        # angular-momentum reaction I_rotor*dW.
+        #
+        # Compute motor-wise yaw reactions in the FRD frame, then sum and convert to FLU
+        # for application.
+        #
+        # optimal_quad_control_rl accounts for the angular-momentum reaction in its
+        # k_r[5-8] * dW term, which a rigid-body plant omits. This is significant on
+        # racers, and is exploited by the policy for fast yaw-authority.
+        _, d_w_rps2 = dyn.motor_derivative(self.motor_w, control_actions, self.params)
+        yaw_frd = float(np.sum(_YAW_SIGN_FRD * (_KAPPA * thrust + _I_ROTOR * d_w_rps2)))
+        self.apply_torque(vec_flu_frd(np.array([0.0, 0.0, yaw_frd])))
+
+        # Velocity-dependent rotor drag (FRD x,y only; z is the collective, above).
+        vb_frd = vec_flu_frd(body2world.inv().apply(s_op.linear_velocity))
+        accel_frd, _ = dyn.body_force_torque_accel(
+            self.motor_w, control_actions, vb_frd, self.params
+        )
+        drag_frd = np.array([accel_frd[0], accel_frd[1], 0.0])
+        self.apply_force(self.mass * vec_flu_frd(drag_frd))
 
     def start(self):
         """Hook invoked when the simulation starts. No-op."""

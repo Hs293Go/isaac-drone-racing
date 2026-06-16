@@ -129,6 +129,16 @@ and fly it on Isaac:
 uv run examples/demo.py session.headless=false session.demo.model=train_out/race_ppo_final.zip
 ```
 
+Optionally, toggle between mirroring the Delft motor-effectiveness model used in
+training and a classical PhysX-native rigid-body model with
+`session.demo.dynamics=kinematic` or `classical`.
+
+```bash
+uv run examples/demo.py session.headless=false \
+  session.demo.model=train_out/race_ppo_final.zip \
+  session.demo.dynamics=classical
+```
+
 ## Design
 
 ### Modeling the drone dynamics
@@ -159,9 +169,18 @@ rotation separately. At each step (100 Hz, one RL action per physics step):
   step, and write them directly to the rigid body. No torque is applied, so the
   asset's inertia tensor and PhysX's gyroscopic terms never enter the loop.
 
-As a result, the policy meets the same analytical model it trained on (exactly
-for rotation, and to within 1e-3 for the PhysX-integrated translation) at the
-cost of rotation no longer being PhysX-native.
+Alternatively, you can swap in a `classical` rotational dynamics formulation:
+apply per-rotor thrust at the arm tips and let PhysX build the roll and pitch
+moments through presumably standard rigid body dynamic laws. Handling yaw is
+more subtle: in addition to the typical rotor drag torque, we also have to
+account for **the rotor angular-momentum reaction** (the equal-and-opposite
+torque of spinning the rotors up and down), which textbook multirotor models
+routinely omit even though it contributes substantial yaw-authority on a racing
+quad.
+
+The `classical` rotational dynamics turn the Isaac Sim drone into a structurally
+different validation target: a policy trained on the effectiveness model flies
+it zero-shot, with no fine-tuning, showing that the policy is general.
 
 ### Batched training vs Isaac validation
 

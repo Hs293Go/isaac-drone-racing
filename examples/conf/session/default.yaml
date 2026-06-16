@@ -11,6 +11,7 @@ demo:
   capture: false        # record the drone's FPV feed to an mp4 (needs fpv.enabled)
   capture_path: fpv.mp4
   capture_fps: 50
+  dynamics: kinematic   # Isaac plant: kinematic (TU-Delft) | classical
 
 train:
   total_timesteps: 3000000

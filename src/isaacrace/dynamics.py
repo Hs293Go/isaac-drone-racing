@@ -211,6 +211,27 @@ def body_force_torque_accel(
     return force, torque
 
 
+def rotor_thrusts(w: NDArray, p: QuadParams | NDArray) -> NDArray:
+    """Per-rotor thrust as an acceleration (m/s^2): ``k_w * W_i^2``. Batch-aware.
+
+    ``body_force_torque_accel`` implicitly handles per-rotor thrust contributions by
+    ``-p.k_w * sq.sum(axis=-1)`` which means motor thrust is the square of the motor
+    speed times ``k_w``, and summing them all gets the collective thrust. Without the
+    sum, the per-rotor contributions is an array made up of ``p.k_w * W_i^2``.
+
+    Args:
+        w: (..., 4) motor state in [-1, 1].
+        p: QuadParams or a (23,) parameter array.
+
+    Returns:
+        (..., 4) per-rotor thrust acceleration; ``sum(-1)`` equals the model's
+        collective thrust accel magnitude. Multiply by mass for force in Newtons.
+    """
+    p = QuadParams._make(p)
+    W = unproject_motor(np.asarray(w))
+    return np.asarray(p.k_w) * W**2
+
+
 def model_derivatives(state: NDArray, u: NDArray, p: QuadParams) -> NDArray:
     """16-state system dynamics according to `optimal_quad_control_RL`.
 

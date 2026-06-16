@@ -52,6 +52,7 @@ def main(cfg: DictConfig):
         seed=session.seed,
         max_steps=session.max_steps,
         fpv=session.fpv,
+        dynamics_mode=session.demo.dynamics,
     )
 
     # Dock a second viewport showing the FPV camera, next to the third-person

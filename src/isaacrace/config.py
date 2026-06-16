@@ -7,6 +7,7 @@ Stdlib-only and import-light (no numpy/isaacsim), so configs load without bootin
 
 from dataclasses import dataclass, field
 import math
+from typing import Literal
 
 
 @dataclass
@@ -43,6 +44,11 @@ class RandomSpawnConfig:
     rate_bounds: float = 0.1  # uniform +/- on each body rate
 
 
+# Toggle for the Isaac plant model between the TU Delft-inspired kinematic-rotation
+# model and a classical rigid-body model.
+DynamicsMode = Literal["kinematic", "classical"]
+
+
 @dataclass
 class DemoConfig:
     """Demo-entrypoint settings (which model to roll out, for how many steps)."""
@@ -52,6 +58,11 @@ class DemoConfig:
     capture: bool = False  # record the drone's FPV feed to an mp4 (needs fpv.enabled)
     capture_path: str = "fpv.mp4"
     capture_fps: int = 50
+    # Isaac plant:
+    # - "kinematic": TU-Delft motor-effectiveness formulation PhysX translation +
+    #   kinematic rotation.
+    # - "classical": Lets PhysX handle per-rotor thrust forces
+    dynamics: DynamicsMode = "kinematic"
 
 
 @dataclass
