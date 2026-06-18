@@ -1,8 +1,19 @@
 # Drone Racing in Isaac
 
-This is a MWE of training and flying an RL quadrotor racer on **current** Isaac
-Sim (5.1, pip-installed). We demonstrate how to integrate Isaac Sim with RL
-drone control research in the following ways:
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![Isaac Sim 5.1](https://img.shields.io/badge/Isaac%20Sim-5.1-76B900?logo=nvidia&logoColor=white)
+![Python 3.11](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)
+![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)
+![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)
+![pre-commit](https://img.shields.io/badge/pre--commit-enabled-FAB040?logo=pre-commit&logoColor=white)
+
+MWE of training and flying an RL quadrotor racer on **current** Isaac Sim (5.1,
+pip-installed).
+
+![Perception-aware racing — Isaac course view (left) and onboard FPV (right)](media/demo.gif)
+
+We demonstrate how to integrate Isaac Sim with RL drone control research in the
+following ways:
 
 1. We simulate a racing drone and a racecourse in Isaac Sim, with one
    modification: the drone's uses the TU Delft **motor-effectiveness model**,
@@ -15,9 +26,7 @@ drone control research in the following ways:
    environment in **minutes**, then evaluate it in Isaac Sim without fine-tuning
    for sim-to-sim transfer.
 
-![Perception-aware racing — Isaac course view (left) and onboard FPV (right)](media/demo.gif)
-
-Isaac Race combines lessons learned from two established codebases:
+This project combines lessons learned from two established codebases:
 
 - [Pegasus Simulator](https://github.com/PegasusSimulator/PegasusSimulator/tree/main)
   - This drone simulation framework showed us some proven practices of
@@ -44,10 +53,10 @@ following results by running `uv run examples/eval.py`, analyzing the policy in
 
 The packaged and baseline policies each fly a 1200-step episode on Isaac PhysX:
 
-| Policy                                | Result on Isaac PhysX                         | Reproduce                                                                                       |
-| ------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Policy                                | Result on Isaac PhysX                          | Reproduce                                                                                       |
+| ------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | Packaged perception-aware             | **25 gates (3.12 laps)**, nose-first, no crash | `uv run examples/demo.py session.headless=true`                                                 |
-| Freshly trained baseline (no shaping) | **30 gates (3.75 laps)**, no crash            | `uv run examples/demo.py session.headless=true session.demo.model=train_out/race_ppo_final.zip` |
+| Freshly trained baseline (no shaping) | **30 gates (3.75 laps)**, no crash             | `uv run examples/demo.py session.headless=true session.demo.model=train_out/race_ppo_final.zip` |
 
 ## Running the code
 
@@ -245,6 +254,8 @@ Similar projects:
 - [Pegasus Simulator](https://github.com/PegasusSimulator): Actively developed
   Isaac simulation framework. Supports integration with PX4 and Ardupilot,
 - [Isaac Drone Racer](https://github.com/kousheekc/isaac_drone_racer):
-  Alternative Isaac drone racing framework. Unmaintained since 6 months ago.
+  Alternative Isaac drone racing framework. Isaac 4.5. Most recent commit 6
+  months ago.
 - [Omnidrones](https://github.com/btx0424/OmniDrones): Isaac multi-drone
-  simulation framework. Unmaintained.
+  simulation framework. Isaac 4.5.
+  [Unmaintained](https://github.com/btx0424/OmniDrones#future-of-this-project).
