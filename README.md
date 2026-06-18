@@ -237,3 +237,14 @@ judging the ease of onboarding and the framework overhead.
   `RaceCourse(track_cfg)` turns the track into gate geometry. Swap
   `conf/track/*.yaml` to race a different course, or activate a profile like
   `experiment=perception_aware`.
+
+## Shoutouts
+
+Similar projects:
+
+- [Pegasus Simulator](https://github.com/PegasusSimulator): Actively developed
+  Isaac simulation framework. Supports integration with PX4 and Ardupilot,
+- [Isaac Drone Racer](https://github.com/kousheekc/isaac_drone_racer):
+  Alternative Isaac drone racing framework. Unmaintained since 6 months ago.
+- [Omnidrones](https://github.com/btx0424/OmniDrones): Isaac multi-drone
+  simulation framework. Unmaintained.
