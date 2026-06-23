@@ -1,13 +1,13 @@
 # Drone Racing in Isaac
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-![Isaac Sim 5.1](https://img.shields.io/badge/Isaac%20Sim-5.1-76B900?logo=nvidia&logoColor=white)
-![Python 3.11](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)
+![Isaac Sim 6.0](https://img.shields.io/badge/Isaac%20Sim-6.0-76B900?logo=nvidia&logoColor=white)
+![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)
 ![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)
 ![pre-commit](https://img.shields.io/badge/pre--commit-enabled-FAB040?logo=pre-commit&logoColor=white)
 
-MWE of training and flying an RL quadrotor racer on **current** Isaac Sim (5.1,
+MWE of training and flying an RL quadrotor racer on **current** Isaac Sim (6.0,
 pip-installed).
 
 ![Perception-aware racing — Isaac course view (left) and onboard FPV (right)](media/demo.gif)
@@ -45,9 +45,11 @@ vision-based (image-to-action) control on PhysX. Contributors welcome!
 ## Results
 
 We measured our performance on a laptop (i7-14650HX, RTX 4060 Laptop 8 GB,
-driver 580.159, Isaac Sim 5.1.0 pip wheels, Python 3.11). We collected the
-following results by running `uv run examples/eval.py`, analyzing the policy in
-`examples/models/race_ppo_perception.zip`.
+driver 580.159, Python 3.11). We collected the following results by running
+`uv run examples/eval.py`, analyzing the policy in
+`examples/models/race_ppo_perception.zip`. `eval.py` is the pure-NumPy
+(Isaac-free) path, so these figures are hardware- and Isaac-version-independent
+and reproduce identically on the 6.0 port.
 
 <img src="media/results.png" width="400" alt="A 3M-step training run, with gates cleared and mean gate visibility rising over training.">
 
@@ -57,6 +59,15 @@ The packaged and baseline policies each fly a 1200-step episode on Isaac PhysX:
 | ------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | Packaged perception-aware             | **25 gates (3.12 laps)**, nose-first, no crash | `uv run examples/demo.py session.headless=true`                                                 |
 | Freshly trained baseline (no shaping) | **30 gates (3.75 laps)**, no crash             | `uv run examples/demo.py session.headless=true session.demo.model=train_out/race_ppo_final.zip` |
+
+> [!NOTE]
+>
+> These on-PhysX figures were captured on Isaac Sim **5.1**. The 6.0 port keeps
+> the same analytic model and actuation semantics — only the actuation API
+> changed (`omni.isaac.dynamic_control` → the `RigidPrim` tensor API; see
+> [Managing the Isaac Sim dependency](#managing-the-isaac-sim-dependency)) — but
+> they have **not yet been re-measured on 6.0**, which needs an RTX 4080-class
+> GPU (6.0's minimum, above this laptop's RTX 4060).
 
 ## Running the code
 
@@ -73,13 +84,21 @@ pipx install uv
 
 ### System Prerequisites
 
-`uv` ensures that a compatible Python 3.11 is installed. However, we currently
-use Isaac Sim 5.1, which requires an NVIDIA RTX GPU and a recent driver. This
-repo is developed and verified on the 580-series driver (580.159):
+`uv` ensures that a compatible Python 3.12 is installed (Isaac Sim 6.0 ships
+cp312 wheels only). Isaac Sim 6.0 requires an NVIDIA RTX GPU — minimum **RTX
+4080 (16 GB)** — and driver **580.95.05 or newer** on Linux. The 580-series
+driver (580.159) this repo was developed on satisfies that:
 
 ```bash
 sudo apt-get install nvidia-driver-580
 ```
+
+> [!NOTE]
+>
+> 6.0's minimum GPU (RTX 4080 16 GB) is a step up from the RTX 4060 Laptop the
+> 5.1 numbers above were captured on, and from 5.1's lighter GPU floor. The
+> pure-NumPy paths (`train.py`'s batched backend and `eval.py`) need no GPU and
+> run anywhere; only the on-PhysX `demo.py` flight needs a 6.0-class card.
 
 ### Running the demo
 
@@ -218,18 +237,41 @@ rotation-based approach in `tests/test_conversions.py`.
 
 ### Managing the Isaac Sim dependency
 
-We consume Isaac Sim 5.1 as the pip `isaacsim` package (cp311) from NVIDIA's
+We consume Isaac Sim 6.0 as the pip `isaacsim` package (cp312) from NVIDIA's
 index (`pypi.nvidia.com`), pinned in `pyproject.toml` and locked in `uv.lock` —
 as opposed to the classic approach of downloading a .zip installation of the
 entire Isaac Sim app and patching `PYTHONPATH` to use it. This makes the Isaac
 Sim version a per-venv, per-project decision, which is only possible on modern
-Isaac since it now ships as ABI-tagged wheels built for stock CPython 3.11.
+Isaac since it now ships as ABI-tagged wheels built for stock CPython 3.12.
 
-> [!WARNING]
+> [!NOTE]
 >
-> A known legacy surface is that the drone is actuated through the deprecated
-> `omni.isaac.dynamic_control` extension; migrating to the tensor APIs is future
-> work.
+> **Porting from 5.1 → 6.0.** The 5.1 build actuated the drone through the
+> `omni.isaac.dynamic_control` extension, which 6.0 **removed** (along with all
+> other deprecated extensions). `RacingDrone` now reads and writes the body
+> through the `RigidPrim` tensor API (`isaacsim.core.prims`) — `get_world_poses`
+> / `set_world_poses`, `get`/`set_linear_velocities` and `…_angular_velocities`,
+> and `apply_forces_and_torques_at_pos(..., is_global=False)` for the body-frame
+> thrust. One behavioural note: dynamic_control was immune to the physics-tensor
+> view being invalidated when a replicator render product is created, but the
+> tensor view is not, so the FPV/course **capture path** rebinds it via
+> `RacingDrone.reacquire_physics_view()` after `start_capture()`. The rest of the
+> Core API (`World`, `Robot`) is only *deprecated* in 6.0, so it is unchanged
+> here; moving to the Warp-based **Core Experimental API** is the natural next
+> step.
+>
+> `racer.usd` is an articulation, so `/body` is a base link; dynamic_control drove
+> it as a plain rigid body and the `RigidPrim` view does the same. This actuation
+> path is the one piece that still wants on-hardware validation on 6.0 (this port
+> was developed without an RTX 4080-class GPU). If PhysX 6.0 declines to drive an
+> articulation link through a rigid-body view, the inherited `SingleArticulation`
+> (`Robot`) pose/velocity API is the drop-in fallback — see `RacingDrone._rigid_body`.
+
+> [!IMPORTANT]
+>
+> `ty.toml` is generated by `scripts/gen_isaac_lsp.py` and is tied to the exact
+> installed Isaac extension versions. After `uv sync` pulls the 6.0 wheels,
+> regenerate it: `env -u PYTHONPATH uv run python scripts/gen_isaac_lsp.py`.
 
 ## Scope and non-goals
 

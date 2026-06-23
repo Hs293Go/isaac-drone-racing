@@ -68,8 +68,11 @@ class _CapturableCamera:
         """Attach a replicator render product + rgb annotator (lazy Kit import).
 
         ``omni.replicator.core`` is a Kit extension only importable once SimulationApp
-        has booted. Safe after ``world.reset()`` for a dynamic_control-driven env (dc is
-        immune to the render-product's physics-tensor-view invalidation).
+        has booted, so this is called after ``world.reset()``. Creating the render
+        product can invalidate the PhysX simulation view that the drone's tensor API
+        (``RigidPrim``) reads/writes through — the old dynamic_control path was immune,
+        the tensor API is not — so the capture path calls
+        ``RacingDrone.reacquire_physics_view()`` afterward to rebind.
 
         Arg:
             resolution: (width, height) in pixels for the captured frames.

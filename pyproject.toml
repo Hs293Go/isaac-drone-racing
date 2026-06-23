@@ -1,8 +1,8 @@
 # isaacrace — minimal Isaac Sim drone RL: race a quadrotor through a figure-8 gate course.
 #
-# Isaac Sim is consumed as the pip-installed `isaacsim` package from NVIDIA's index (cp311) — no
+# Isaac Sim is consumed as the pip-installed `isaacsim` package from NVIDIA's index (6.0, cp312) — no
 # standalone zip, no ISAACSIM_PATH, no PYTHONPATH patching. Run with `env -u PYTHONPATH` so a sourced
-# ROS distro can't leak into the 3.11 venv; `OMNI_KIT_ACCEPT_EULA=YES` accepts the EULA non-interactively.
+# ROS distro can't leak into the 3.12 venv; `OMNI_KIT_ACCEPT_EULA=YES` accepts the EULA non-interactively.
 #
 # Setup:  uv sync
 # Demo:   env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES uv run python examples/demo.py session.headless=false
@@ -12,9 +12,10 @@
 name = "isaacrace"
 version = "0.1.0"
 description = "Minimal Isaac Sim (PhysX) drone RL: race a quadrotor through a figure-8 gate course."
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.12,<3.13" # Isaac Sim 6.0 ships cp312 wheels only
 dependencies = [
-  "isaacsim[all,extscache]==5.1.0.0",
+  "isaacsim[all,extscache]==6.0.0.1", # 6.0 GA (early-dev build is 6.0.0.0; note ==6.0.0 resolves to it)
+  "tinyobjloader==2.0.0rc13",         # isaacsim-core 6.0 pins this prerelease; declare it directly so uv enables the rc (transitive prerelease pins aren't auto-enabled).
   "stable-baselines3>=2.8,<2.9",
   "gymnasium>=1.0",
   "torch",
@@ -37,6 +38,10 @@ packages = ["src/isaacrace"]
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
+# Isaac Sim ships Linux/Windows wheels only (no macOS), and this repo targets Ubuntu.
+# Restrict universal resolution to Linux so uv doesn't fail solving an unsatisfiable
+# macOS split (the darwin split is what the original resolution error reported).
+environments = ["sys_platform == 'linux'"]
 constraint-dependencies = ["lxml<7", "stable-baselines3<2.9"]
 
 [[tool.uv.index]]
@@ -116,12 +121,12 @@ ignore = [
   "PLR0916",
   "PLR0917",
   # Intentional in this Isaac Sim / RL MWE (one-offs use targeted # noqa instead):
-  "N802",     # math-symbol function names (e.g. motor_W) read better capitalized
-  "N806",     # math-symbol locals (rotation R, motor speed W) mirror the equations
-  "PLC0415",  # isaacsim imports MUST follow SimulationApp() boot -> deliberate in-function imports
-  "ARG002",   # base/override signature parity (RacingDrone.update_state keeps dt; VecEnv overrides keep indices)
-  "SLF001",   # deliberate within-package access to _members (demo<->env, env<->quad)
-  "PLR6301",  # lifecycle hooks (start/stop) intentionally take no self state
+  "N802",    # math-symbol function names (e.g. motor_W) read better capitalized
+  "N806",    # math-symbol locals (rotation R, motor speed W) mirror the equations
+  "PLC0415", # isaacsim imports MUST follow SimulationApp() boot -> deliberate in-function imports
+  "ARG002",  # base/override signature parity (RacingDrone.update_state keeps dt; VecEnv overrides keep indices)
+  "SLF001",  # deliberate within-package access to _members (demo<->env, env<->quad)
+  "PLR6301", # lifecycle hooks (start/stop) intentionally take no self state
 ]
 fixable = ["ALL"]
 unfixable = ["S", "PL"]

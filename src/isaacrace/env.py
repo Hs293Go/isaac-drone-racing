@@ -128,9 +128,9 @@ class RaceEnv(gym.Env):
             dynamics_mode=dynamics_mode,
         )
         self.world.reset()
-        # dynamic_control reads/writes need the timeline playing; start it once
-        # here so the env is self-contained (demo/train just construct it and use
-        # the gym API — no external play()).
+        # PhysX tensor-view reads/writes (RigidPrim) need the timeline playing; start
+        # it once here so the env is self-contained (demo/train just construct it and
+        # use the gym API — no external play()).
         omni.timeline.get_timeline_interface().play()
 
     # ------------------------------------------------------------------ scene

@@ -117,6 +117,10 @@ def main(cfg: DictConfig):
         )
         course_cam.start_capture(session.fpv.resolution)
         env.quad.camera.start_capture(session.fpv.resolution)
+        # The render products just created can invalidate the PhysX simulation view the
+        # drone's tensor API reads/writes through (dynamic_control was immune; the
+        # tensor API is not). Rebind it so the next env.step() reads/writes a live view.
+        env.quad.reacquire_physics_view()
         for _ in range(2):
             env.world.render()  # warm up: the render products' first frames are empty
 

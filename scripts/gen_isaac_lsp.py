@@ -107,14 +107,15 @@ for d in ext_list:
         count += 1
 
 # --- 2b. inject hand-written stubs next to compiled .so bindings. A stub in a
-# separate path can't help when the binding lives in a *regular* package (e.g.
-# omni.isaac.dynamic_control): the package shadows it. So copy each typings/*.pyi
-# beside the real module in its owning ext dir. Idempotent; redone each run. ---
+# separate path can't help when the binding lives in a *regular* package (i.e. one
+# with an __init__): the package shadows it. So copy each typings/*.pyi beside the
+# real module in its owning ext dir. Idempotent; redone each run. Currently a no-op
+# (no checked-in stubs); kept for any future compiled binding ty can't introspect. ---
 TYPINGS = ROOT / "typings"
 injected = 0
 if TYPINGS.is_dir():
     for stub in TYPINGS.rglob("*.pyi"):
-        relmod = stub.parent.relative_to(TYPINGS)  # e.g. omni/isaac/dynamic_control
+        relmod = stub.parent.relative_to(TYPINGS)  # e.g. omni/some/compiled_ext
         for d in ext_list:
             dest_dir = d / relmod
             if dest_dir.is_dir():
@@ -143,7 +144,7 @@ lines = [
     "",
     "[environment]",
     'python = ".venv"',
-    'python-version = "3.11"',
+    'python-version = "3.12"',
     "extra-paths = [",
     *[f"    {json.dumps(p)}," for p in paths],
     "]",
