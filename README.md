@@ -7,8 +7,8 @@
 ![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)
 ![pre-commit](https://img.shields.io/badge/pre--commit-enabled-FAB040?logo=pre-commit&logoColor=white)
 
-MWE of training and flying an RL quadrotor racer on **current** Isaac Sim (6.0,
-pip-installed).
+MWE of training and flying an RL quadrotor racer on **current** Isaac Sim (
+pip-installed. 5.1 on branch `develop`, **6.0 on branch `isaacsim-6.0`**).
 
 ![Perception-aware racing — Isaac course view (left) and onboard FPV (right)](media/demo.gif)
 
