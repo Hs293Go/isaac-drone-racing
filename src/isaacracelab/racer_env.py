@@ -41,6 +41,12 @@ _YAW_SIGN_FRD = (-1.0, +1.0, +1.0, -1.0)  # per-rotor yaw-reaction sign (FRD-z)
 _KAPPA = 0.0157  # cq/ct reaction-to-thrust ratio
 _I_ROTOR = 6.19e-6  # rotor+prop polar inertia (kg*m^2), the dW yaw-reaction term
 
+# Measured perception-net error (experimental/perception_train.py): gate Δposition MAE
+# ~0.1 m, gate-yaw MAE ~0.15 rad. Used as the obs-noise std so a controller trained here
+# tolerates the modular perception net's estimate at composition time.
+_PERCEP_POS_STD = 0.10  # m, gate-relative position (build_obs[0:3])
+_PERCEP_YAW_STD = 0.15  # rad, gate-relative yaw (build_obs[8])
+
 
 def _default_track() -> RaceTrackConfig:
     """Placeholder square track so RacerEnvCfg() builds; train.py loads figure8."""
@@ -80,6 +86,10 @@ class RacerEnvCfg(DirectRLEnvCfg):
     randomize_reset: bool = True
     rate_penalty: float = course_torch.RaceCourseTorch.RATE_PENALTY
     gate_bonus: float = 0.0  # +reward per gate passed (racing incentive; 0 = off)
+    # Observation-noise domain randomization: scale on the measured perception error,
+    # added to the gate-relative pose obs so a controller trained here tolerates the
+    # perception net's estimate. 0 = clean; 1 = measured magnitude. Weight-only.
+    obs_noise: float = 0.0
     # Optional FPV camera (default off; needs AppLauncher --enable_cameras). When set,
     # a TiledCamera mounts on /body and renders each step -> self._camera.data.output.
     tiled_camera: TiledCameraCfg | None = None
@@ -203,7 +213,18 @@ class RacerEnv(DirectRLEnv):
         return self._course.build_obs(ned, self._target_gate)
 
     def _get_observations(self) -> dict:
-        return {"policy": self._state_obs()}
+        """Policy obs = gate-relative state, optionally + perception-magnitude noise.
+
+        Domain randomization on the gate-pose estimate the perception net supplies, so
+        the controller learns to tolerate it; _state_obs stays clean for labels and the
+        oracle. cfg.obs_noise=0 reproduces the clean env exactly.
+        """
+        obs = self._state_obs()
+        s = self.cfg.obs_noise
+        if s > 0.0:
+            obs[:, 0:3] += s * _PERCEP_POS_STD * torch.randn_like(obs[:, 0:3])
+            obs[:, 8] += s * _PERCEP_YAW_STD * torch.randn_like(obs[:, 8])
+        return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
         pos_new = self._robot.data.root_pos_w - self.scene.env_origins

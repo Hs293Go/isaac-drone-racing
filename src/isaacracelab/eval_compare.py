@@ -8,7 +8,11 @@ PhysX plant, does the single-env-fine-tuned classical policy agree across the tw
 (parity), and how does a policy trained NATIVELY on the GPU classical plant compare.
 
     env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES uv run --group isaaclab \
-        python -u examples/isaaclab/eval_compare.py --num_envs 256 --headless
+        python -u -m isaacracelab.eval_compare --num_envs 256 --headless
+
+--obs_noise injects perception-magnitude noise into the obs at eval, so the policies can
+be raced under the noise the modular composition will feed them — the paired test of
+whether obs-noise-DR training buys robustness a clean-trained racer lacks.
 """
 
 import argparse
@@ -18,6 +22,12 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Baseline-vs-GPU policy comparison")
 parser.add_argument("--num_envs", type=int, default=256)
+parser.add_argument(
+    "--obs_noise",
+    type=float,
+    default=0.0,
+    help="obs-noise DR scale at eval (1.0 = measured magnitude)",
+)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
@@ -54,6 +64,7 @@ cfg.track = load_track()
 cfg.scene.num_envs = args.num_envs
 cfg.sim.device = args.device
 cfg.randomize_reset = True
+cfg.obs_noise = args.obs_noise
 env = RacerEnv(cfg)
 dev = env.device
 HORIZON = int(env.max_episode_length) + 2
@@ -133,6 +144,8 @@ def random_policy(obs):
 CKPT_SURVIVOR = "examples/train_out/race_classical/model_199.pt"  # 200it
 CKPT_RACER = "examples/train_out/race_classical_race/model_799.pt"  # 800it+bonus
 
+CKPT_NOISE_ROBUST = "examples/train_out/race_noise_robust/model_799.pt"  # 800it+DR
+
 POLICIES = [
     ("random", random_policy),
     ("OQCRL baseline (sb3)", sb3_policy("examples/models/race_ppo_baseline.zip")),
@@ -140,9 +153,18 @@ POLICIES = [
     ("GPU survivor (rsl_rl 200it)", rsl_policy(CKPT_SURVIVOR)),
     ("GPU racer (rsl_rl 800it+bonus)", rsl_policy(CKPT_RACER)),
 ]
+# The obs-noise-DR racer (this experiment) — only once it has been trained.
+if (ROOT / CKPT_NOISE_ROBUST).exists():
+    POLICIES.append((
+        "GPU racer + obs-noise DR (rsl_rl)",
+        rsl_policy(CKPT_NOISE_ROBUST),
+    ))
 
 rows = [
-    f"# GPU classical plant, {args.num_envs} random spawns, horizon {HORIZON}",
+    (
+        f"# GPU classical plant, {args.num_envs} random spawns, horizon {HORIZON}, "
+        f"obs_noise={args.obs_noise}"
+    ),
     f"{'policy':32s} {'gates':>7s} {'survival':>9s} {'ep_len':>8s}",
 ]
 for name, act in POLICIES:

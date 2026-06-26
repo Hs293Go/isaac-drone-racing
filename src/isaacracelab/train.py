@@ -21,6 +21,12 @@ parser.add_argument("--max_iterations", type=int, default=500)
 parser.add_argument("--track", default=None, help="track yaml (default: figure8)")
 parser.add_argument("--gate_bonus", type=float, default=10.0, help="reward/gate")
 parser.add_argument("--rate_penalty", type=float, default=5e-4)
+parser.add_argument(
+    "--obs_noise",
+    type=float,
+    default=0.0,
+    help="obs-noise DR scale (1.0 = measured perception magnitude)",
+)
 parser.add_argument("--run_name", default="race_classical")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -56,6 +62,7 @@ env_cfg.scene.num_envs = args.num_envs
 env_cfg.sim.device = args.device
 env_cfg.gate_bonus = args.gate_bonus
 env_cfg.rate_penalty = args.rate_penalty
+env_cfg.obs_noise = args.obs_noise
 env = RacerEnv(env_cfg)
 env = RslRlVecEnvWrapper(env)  # gym (num_envs, ...) -> rsl_rl VecEnv
 

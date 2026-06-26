@@ -22,6 +22,11 @@ parser.add_argument("--iters", type=int, default=60)
 parser.add_argument("--rollout", type=int, default=32)
 parser.add_argument("--epochs", type=int, default=4)
 parser.add_argument("--batch", type=int, default=512)
+parser.add_argument(
+    "--supervised",
+    action="store_true",
+    help="teacher-only data (beta=1, no DAgger anneal)",
+)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
@@ -96,7 +101,7 @@ log = []
 for it in range(args.iters):
     # DAgger: anneal driver teacher->composed so the net sees its OWN distribution;
     # labels are always the true state.
-    beta = max(0.0, 1.0 - it / (args.iters * 0.4))
+    beta = 1.0 if args.supervised else max(0.0, 1.0 - it / (args.iters * 0.4))
     vis_buf, state_buf = [], []
     with torch.no_grad():
         for _ in range(args.rollout):
