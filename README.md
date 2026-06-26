@@ -182,21 +182,27 @@ The `classical` rotational dynamics turn the Isaac Sim drone into a structurally
 different validation target: a policy trained on the effectiveness model flies
 it zero-shot, with no fine-tuning, showing that the policy is general.
 
-### Batched training vs Isaac validation
+### Training backends: analytic, single-Isaac, and GPU-parallel
 
-Isaac can be the training environment: you can try it out by passing
-`session.train.backend=isaac`. However, it is slow because every action steps
-the full physics engine to advance what is a shallow analytical model at this
-stage: it runs around 240 steps/s on my laptop, making a 3M-step run take 2+
-hours.
+There are three ways to generate experience, trading fidelity for speed:
 
-To train in minutes, we use `BatchedRaceEnv` instead. It integrates N drones
-(default 512) as one NumPy array through the natively batch-aware `dynamics.py`
-functions and the same `RaceCourse` reward/termination/spawn rules that the
-Isaac `RaceEnv` consumes. That runs about 400k steps/s, so the 3M-step PPO run
-finishes in <5 minutes. The Isaac env remains the validation target: a policy
-trained in the batched env transfers to PhysX with no fine-tuning (Results
-above).
+1. **Single Isaac `RaceEnv`** (`session.train.backend=isaac`) — full PhysX, one
+   drone. Faithful but slow (~240 steps/s), so a 3M-step run takes 2+ hours. It is
+   the validation target, not a practical trainer.
+2. **Analytic batched `BatchedRaceEnv`** (the default) — N drones (default 512) as
+   one NumPy array through the natively batch-aware `dynamics.py` and the same
+   `RaceCourse` reward/termination/spawn rules the Isaac `RaceEnv` consumes. ~375k
+   steps/s, so a 3M-step PPO run finishes in <5 minutes.
+3. **GPU-parallel Isaac Lab `RacerEnv`** (`src/isaacracelab/`) — thousands of
+   drones stepping full PhysX on the GPU. ~257k steps/s at 2048 envs.
+
+**The headline:** GPU-parallel PhysX training (3) is now in the _same order of
+magnitude_ as the analytic twin (2) — ~257k vs ~375k steps/s, about 1.5× — where
+single-env Isaac (1) was ~1500× slower. Training *on the real physics engine* is now
+computationally competitive, not just a validation afterthought. A policy trained in
+the analytic twin still transfers to PhysX with no fine-tuning (Results above); the
+GPU path additionally trains directly on the PhysX (classical) plant at scale. See
+[`src/isaacracelab/README.md`](src/isaacracelab/README.md).
 
 ### Handling frame conventions
 
@@ -246,10 +252,17 @@ and a few engineering perks:
 It is **not** a simulation framework that accommodates non-Quadrotor vehicles
 and multiple vehicles.
 
-It is **not yet** a GPU-parallelized PhysX training platform and a
-vision-in-the-loop training platform. We are watching the development of
-[Aerial Gym](https://ntnu-arl.github.io/aerial_gym_simulator) actively and
-judging the ease of onboarding and the framework overhead.
+It **now includes** a GPU-parallelized PhysX training path via Isaac Lab
+([`src/isaacracelab/`](src/isaacracelab/)), computationally competitive with the
+analytic twin (above) — train on the real physics engine at scale, not only validate
+on it. We onboarded Isaac Lab directly rather than adopting
+[Aerial Gym](https://ntnu-arl.github.io/aerial_gym_simulator), keeping it an opt-in
+second track so the framework-free core stays intact.
+
+Vision-in-the-loop (UVP) is **under active exploration** on that GPU track (the in-flight
+scripts live in [`experimental/`](experimental/)): an FPV camera renders the gates the policy
+must read, and the current direction is a modular perception→control architecture (a
+supervised image→state net feeding the state racer). Not yet a validated capability.
 
 ## Notes
 

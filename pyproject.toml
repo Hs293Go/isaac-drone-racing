@@ -33,7 +33,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/isaacrace"]
+packages = ["src/isaacrace", "src/isaacracelab"]
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
@@ -47,6 +47,11 @@ url = "https://pypi.nvidia.com"
 # Test-only deps; dynamics.py is pure NumPy, so the dynamics tests run under plain
 # pytest (no Isaac Sim boot). sympy is the symbolic ground truth ported from OQCRL.
 dev = ["pytest>=8", "sympy>=1.13"]
+# Opt-in: Isaac Lab 2.3.x (built on Isaac Sim 5.1) for the GPU-parallel PhysX track in the
+# isaacracelab package. Kept out of core deps to preserve the framework-free MWE; install
+# with `uv sync --group isaaclab`. The pip-only Isaac Lab package ships no runner scripts,
+# so isaacracelab provides our own (+ experimental/ for the vision exploration).
+isaaclab = ["isaaclab[all]==2.3.2.post1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
