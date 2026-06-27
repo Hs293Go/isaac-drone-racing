@@ -101,21 +101,32 @@ The demo prints `gates_passed` and `laps` at the end of the episode.
 
 ### Training a new policy
 
-To train a new policy from scratch (batched NumPy backend, finishes in minutes):
+Three first-class backends (see [Three training backends](#three-training-backends)) —
+train on whichever plant and speed you need; none is the "real" one.
+
+**Analytic NumPy twin** — effectiveness model, finishes in minutes:
 
 ```bash
 uv run examples/train.py session.train.domain_randomization=true
 ```
 
-where `session.train.domain_randomization=true` resamples all 23 model
-parameters ±10% each episode (`optimal_quad_control_RL`-style).
+`session.train.domain_randomization=true` resamples all 23 model parameters ±10% each
+episode (`optimal_quad_control_RL`-style); add `experiment=perception_aware` for the
+gate-visibility + nose-first shaping instead of the bare progress reward.
 
-> [!TIP]
->
-> - Add `experiment=perception_aware` to train with the gate-visibility +
->   nose-first shaping instead of the bare progress reward.
-> - Set `session.train.backend=isaac` to train directly against PhysX (single
->   env, ~240 steps/s — useful as a fidelity check at the cost of speed).
+**GPU-parallel Isaac Lab** — the classical PhysX plant at scale (~257k steps/s; needs the
+`isaaclab` group):
+
+```bash
+env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES uv run --group isaaclab \
+  python -m isaacracelab.train --num_envs 4096 --headless
+```
+
+**Single-env Isaac** — full PhysX, one drone, a high-fidelity check (~240 steps/s):
+
+```bash
+uv run examples/train.py session.train.backend=isaac
+```
 
 Evaluate any checkpoint without booting Isaac:
 
@@ -182,27 +193,25 @@ The `classical` rotational dynamics turn the Isaac Sim drone into a structurally
 different validation target: a policy trained on the effectiveness model flies
 it zero-shot, with no fine-tuning, showing that the policy is general.
 
-### Training backends: analytic, single-Isaac, and GPU-parallel
+### Three training backends
 
-There are three ways to generate experience, trading fidelity for speed:
+Three co-equal ways to generate experience — pick by the plant you want and the speed
+you need. None is subordinate; they target different sim-to-real bets.
 
-1. **Single Isaac `RaceEnv`** (`session.train.backend=isaac`) — full PhysX, one
-   drone. Faithful but slow (~240 steps/s), so a 3M-step run takes 2+ hours. It is
-   the validation target, not a practical trainer.
-2. **Analytic batched `BatchedRaceEnv`** (the default) — N drones (default 512) as
-   one NumPy array through the natively batch-aware `dynamics.py` and the same
-   `RaceCourse` reward/termination/spawn rules the Isaac `RaceEnv` consumes. ~375k
-   steps/s, so a 3M-step PPO run finishes in <5 minutes.
-3. **GPU-parallel Isaac Lab `RacerEnv`** (`src/isaacracelab/`) — thousands of
-   drones stepping full PhysX on the GPU. ~257k steps/s at 2048 envs.
+| backend | plant | throughput | role |
+| --- | --- | --- | --- |
+| **Analytic batched** `BatchedRaceEnv` | effectiveness model (NumPy) | ~375k steps/s | fastest iteration; the analytic twin |
+| **GPU-parallel Isaac Lab** `RacerEnv` | classical, PhysX on GPU | ~257k steps/s @ 2048 envs | the real engine at scale |
+| **Single Isaac** `RaceEnv` | full PhysX, one env | ~240 steps/s | high-fidelity reference / check |
 
-**The headline:** GPU-parallel PhysX training (3) is now in the _same order of
-magnitude_ as the analytic twin (2) — ~257k vs ~375k steps/s, about 1.5× — where
-single-env Isaac (1) was ~1500× slower. Training *on the real physics engine* is now
-computationally competitive, not just a validation afterthought. A policy trained in
-the analytic twin still transfers to PhysX with no fine-tuning (Results above); the
-GPU path additionally trains directly on the PhysX (classical) plant at scale. See
-[`src/isaacracelab/README.md`](src/isaacracelab/README.md).
+The two batched backends are the **same order of magnitude** (~257k vs ~375k steps/s) and
+finish a 3M-step PPO run in minutes; single-env Isaac is ~1500× slower — a faithful reference,
+not a workhorse. The analytic twin trains the _effectiveness_ model and the Isaac Lab path the
+_classical_ PhysX model — two different sim-to-real bets — and a policy trained in the analytic
+twin transfers to PhysX with no fine-tuning (Results above). The analytic + single-Isaac
+backends are the framework-free core (`examples/train.py`, `backend=batched|isaac`); the GPU
+path is the sibling [`isaacracelab`](src/isaacracelab/) package (`python -m isaacracelab.train`).
+See [`src/isaacracelab/README.md`](src/isaacracelab/README.md).
 
 ### Handling frame conventions
 
@@ -252,12 +261,13 @@ and a few engineering perks:
 It is **not** a simulation framework that accommodates non-Quadrotor vehicles
 and multiple vehicles.
 
-It **now includes** a GPU-parallelized PhysX training path via Isaac Lab
-([`src/isaacracelab/`](src/isaacracelab/)), computationally competitive with the
-analytic twin (above) — train on the real physics engine at scale, not only validate
-on it. We onboarded Isaac Lab directly rather than adopting
-[Aerial Gym](https://ntnu-arl.github.io/aerial_gym_simulator), keeping it an opt-in
-second track so the framework-free core stays intact.
+It offers **three co-equal training backends** (above): the analytic effectiveness-model
+twin, single-env PhysX, and GPU-parallel PhysX via Isaac Lab
+([`src/isaacracelab/`](src/isaacracelab/)) — train on whichever plant fits the bet. Isaac
+Lab is a first-class path (its own `isaacracelab` package + an opt-in `isaaclab` dependency
+group), kept a *sibling* of the framework-free core rather than entangled with it; we
+onboarded it directly instead of adopting
+[Aerial Gym](https://ntnu-arl.github.io/aerial_gym_simulator).
 
 Vision-in-the-loop (UVP) is **under active exploration** on that GPU track (the in-flight
 scripts live in [`experimental/`](experimental/)): an FPV camera renders the gates the policy

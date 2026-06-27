@@ -1,9 +1,10 @@
-# Isaac Lab track (opt-in)
+# isaacracelab — GPU-parallel PhysX training
 
-GPU-parallel PhysX training via **Isaac Lab 2.3.x** (built on our pinned Isaac Sim 5.1).
-This is a *second track* alongside the framework-free core — it trains on the **classical
-(PhysX-native) dynamics**, the formulation Isaac Lab's GPU pipeline requires. Kept out of
-the core deps so the MWE stays framework-free.
+A **co-equal training backend** alongside the analytic NumPy twin and single-env Isaac (see
+the [top-level README](../../README.md#three-training-backends)) — GPU-parallel PhysX training
+via **Isaac Lab 2.3.x**, built on our pinned Isaac Sim 5.1. A *sibling* of the framework-free
+`isaacrace` core, it trains on the **classical (PhysX-native) dynamics** that Isaac Lab's GPU
+pipeline requires; its `isaaclab` deps are an opt-in group so the core stays framework-free.
 
 ## Status: canonical vs exploratory
 
